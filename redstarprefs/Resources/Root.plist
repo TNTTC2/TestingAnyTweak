@@ -4,6 +4,7 @@
 <dict>
 	<key>items</key>
 	<array>
+		<!-- 開關與基本設定 -->
 		<dict>
 			<key>cell</key>
 			<string>PSGroupCell</string>
@@ -25,6 +26,7 @@
 			<string>com.tnhdev.redstar/ReloadPrefs</string>
 		</dict>
 
+		<!-- 週期設定 -->
 		<dict>
 			<key>cell</key>
 			<string>PSGroupCell</string>
@@ -48,6 +50,7 @@
 			<string>com.tnhdev.redstar/ReloadPrefs</string>
 		</dict>
 
+		<!-- UUID 設定 -->
 		<dict>
 			<key>cell</key>
 			<string>PSGroupCell</string>
@@ -62,13 +65,31 @@
 			<key>default</key>
 			<string></string>
 			<key>defaults</key>
-			<string>com.tnhdev.redstar</string>
+			<string>com.tnhdev.fun.redstar</string>
 			<key>key</key>
 			<string>appUUID</string>
 			<key>placeholder</key>
-			<string>XXXXXXXX-XXXX-XXXX-XXXX-XXXXXXX</string>
+			<string>XXXXXXXX-XXXX-XXXX-XXXX-XXXXXXXXXXXX</string>
 			<key>PostNotification</key>
-			<string>com.tnhdev.redstar/ReloadPrefs</string>
+			<string>com.tnhdev.fun.redstar/ReloadPrefs</string>
+		</dict>
+
+		<!-- 手動測試與日誌區塊 -->
+		<dict>
+			<key>cell</key>
+			<string>PSGroupCell</string>
+			<key>label</key>
+			<string>Diagnose &amp; Test</string>
+			<key>footerText</key>
+			<string>Logs will be saved to /var/jb/RedStar/test_log.txt</string>
+		</dict>
+		<dict>
+			<key>cell</key>
+			<string>PSButtonCell</string>
+			<key>label</key>
+			<string>Run Manual Test</string>
+			<key>action</key>
+			<string>runTestAndLog</string>
 		</dict>
 	</array>
 	<key>title</key>
