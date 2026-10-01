@@ -8,7 +8,7 @@
 			<key>cell</key>
 			<string>PSGroupCell</string>
 			<key>label</key>
-			<string>系統開關</string>
+			<string>RedStar Internal Settings</string>
 		</dict>
 		<dict>
 			<key>cell</key>
@@ -66,7 +66,7 @@
 			<key>key</key>
 			<string>appUUID</string>
 			<key>placeholder</key>
-			<string>65F-8D83-D0A444297ABA</string>
+			<string>XXXXXXXX-XXXX-XXXX-XXXX-XXXXXXX</string>
 			<key>PostNotification</key>
 			<string>com.tnhdev.redstar/ReloadPrefs</string>
 		</dict>
