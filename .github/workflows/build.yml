@@ -1,0 +1,44 @@
+name: Build Trace Viewer App (.ipa)
+
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: macos-latest
+
+    steps:
+    - name: Checkout Code
+      uses: actions/checkout@v4
+
+    - name: Install XcodeGen
+      run: brew install xcodegen
+
+    - name: Generate Xcode Project
+      run: xcodegen generate
+
+    - name: Build App with Xcode
+      run: |
+        xcodebuild build \
+          -project "Trace Viewer.xcodeproj" \
+          -scheme "Trace Viewer" \
+          -sdk iphoneos \
+          -configuration Release \
+          -derivedDataPath build \
+          CODE_SIGN_IDENTITY="" \
+          CODE_SIGNING_REQUIRED=NO \
+          CODE_SIGNING_ALLOWED=NO
+
+    - name: Package to .ipa
+      run: |
+        mkdir -p Payload
+        cp -r "build/Build/Products/Release-iphoneos/Trace Viewer.app" Payload/
+        zip -r TraceViewer.ipa Payload
+
+    - name: Upload .ipa Artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: TraceViewer-IPA
+        path: TraceViewer.ipa
