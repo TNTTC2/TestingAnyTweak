@@ -32,15 +32,21 @@ static void captureAndSaveScreenshot() {
             return; // 目錄不存在直接安全跳過
         }
 
-        // 取得主螢幕 Window 並渲染為圖片
+        // 取得當前活躍 Scene 的 Key Window
         UIWindow *keyWindow = nil;
-        for (UIWindow *window in [UIApplication sharedApplication].windows) {
-            if (window.isKeyWindow) {
-                keyWindow = window;
-                break;
+        for (UIScene *scene in [UIApplication sharedApplication].connectedScenes) {
+            if (scene.activationState == UISceneActivationStateForegroundActive && [scene isKindOfClass:[UIWindowScene class]]) {
+                UIWindowScene *windowScene = (UIWindowScene *)scene;
+                for (UIWindow *window in windowScene.windows) {
+                    if (window.isKeyWindow) {
+                        keyWindow = window;
+                        break;
+                    }
+                }
             }
+            if (keyWindow) break;
         }
-        if (!keyWindow) keyWindow = [[UIApplication sharedApplication].windows firstObject];
+
         if (!keyWindow) return;
 
         UIGraphicsBeginImageContextWithOptions(keyWindow.bounds.size, YES, 0.0);
@@ -66,6 +72,7 @@ static void captureAndSaveScreenshot() {
         // 遇到任何錯誤靜默忽略，保證不進入 Safe Mode
     }
 }
+
 
 // 定時器管理
 static void updateTimer() {
