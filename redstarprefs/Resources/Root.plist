@@ -4,36 +4,57 @@
 <dict>
 	<key>items</key>
 	<array>
-		<!-- 開關區塊 -->
 		<dict>
 			<key>cell</key>
 			<string>PSGroupCell</string>
 			<key>label</key>
-			<string>RedStar Internal Settings</string>
+			<string>系統開關</string>
 		</dict>
 		<dict>
 			<key>cell</key>
 			<string>PSSwitchCell</string>
 			<key>default</key>
-			<true/>
+			<false/>
 			<key>defaults</key>
-			<string>com.yourname.redstar</string>
+			<string>com.tnhdev.redstar</string>
 			<key>key</key>
 			<string>enabled</string>
 			<key>label</key>
-			<string>Enable</string>
+			<string>Enabled</string>
 			<key>PostNotification</key>
-			<string>com.yourname.redstar/ReloadPrefs</string>
+			<string>com.tnhdev.redstar/ReloadPrefs</string>
 		</dict>
 
-		<!-- UUID 文字輸入區塊 -->
 		<dict>
 			<key>cell</key>
 			<string>PSGroupCell</string>
 			<key>label</key>
-			<string>App Container UUID</string>
+			<string>Screenshot cycle (minutes)</string>
+		</dict>
+		<dict>
+			<key>cell</key>
+			<string>PSEditTextCell</string>
+			<key>default</key>
+			<string>5</string>
+			<key>defaults</key>
+			<string>com.tnhdev.redstar</string>
+			<key>key</key>
+			<string>intervalMinutes</string>
+			<key>placeholder</key>
+			<string>Recommend: 5</string>
+			<key>isNumeric</key>
+			<true/>
+			<key>PostNotification</key>
+			<string>com.tnhdev.redstar/ReloadPrefs</string>
+		</dict>
+
+		<dict>
+			<key>cell</key>
+			<string>PSGroupCell</string>
+			<key>label</key>
+			<string>Trace Viewer Data UUID</string>
 			<key>footerText</key>
-			<string>App Container UUID。</string>
+			<string>Enter App Data Container UUID</string>
 		</dict>
 		<dict>
 			<key>cell</key>
@@ -41,13 +62,13 @@
 			<key>default</key>
 			<string></string>
 			<key>defaults</key>
-			<string>com.yourname.redstar</string>
+			<string>com.tnhdev.redstar</string>
 			<key>key</key>
 			<string>appUUID</string>
 			<key>placeholder</key>
-			<string>XXXXXXXX-XXXX-XXXX-XXXX-XXXXXXXXXXXX</string>
+			<string>65F-8D83-D0A444297ABA</string>
 			<key>PostNotification</key>
-			<string>com.yourname.redstar/ReloadPrefs</string>
+			<string>com.tnhdev.redstar/ReloadPrefs</string>
 		</dict>
 	</array>
 	<key>title</key>
