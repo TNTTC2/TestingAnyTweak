@@ -1,0 +1,56 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>items</key>
+	<array>
+		<!-- 開關區塊 -->
+		<dict>
+			<key>cell</key>
+			<string>PSGroupCell</string>
+			<key>label</key>
+			<string>RedStar Internal Settings</string>
+		</dict>
+		<dict>
+			<key>cell</key>
+			<string>PSSwitchCell</string>
+			<key>default</key>
+			<true/>
+			<key>defaults</key>
+			<string>com.yourname.redstar</string>
+			<key>key</key>
+			<string>enabled</string>
+			<key>label</key>
+			<string>Enable</string>
+			<key>PostNotification</key>
+			<string>com.yourname.redstar/ReloadPrefs</string>
+		</dict>
+
+		<!-- UUID 文字輸入區塊 -->
+		<dict>
+			<key>cell</key>
+			<string>PSGroupCell</string>
+			<key>label</key>
+			<string>App Container UUID</string>
+			<key>footerText</key>
+			<string>App Container UUID。</string>
+		</dict>
+		<dict>
+			<key>cell</key>
+			<string>PSEditTextCell</string>
+			<key>default</key>
+			<string></string>
+			<key>defaults</key>
+			<string>com.yourname.redstar</string>
+			<key>key</key>
+			<string>appUUID</string>
+			<key>placeholder</key>
+			<string>XXXXXXXX-XXXX-XXXX-XXXX-XXXXXXXXXXXX</string>
+			<key>PostNotification</key>
+			<string>com.yourname.redstar/ReloadPrefs</string>
+		</dict>
+	</array>
+	<key>title</key>
+	<string>RedStar</string>
+</dict>
+</plist>
