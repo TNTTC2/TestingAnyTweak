@@ -1,38 +1,54 @@
 #import <UIKit/UIKit.h>
 
-@interface SBLockScreenManager : NSObject
-+ (id)sharedInstance;
-- (BOOL)isUILocked;
-@end
+static NSString *const kPrefPath = @"/var/mobile/Library/Preferences/com.tnhdev.fun.redstar.plist";
+static NSString *const kLogDir = @"/var/jb/RedStar";
+static dispatch_source_t timerSource = nil;
 
-static NSTimer *traceTimer = nil;
-
-// 讀取設定檔 (Preferences)
-static NSDictionary *loadPreferences() {
-    NSString *prefPath = @"/var/mobile/Library/Preferences/com.tnhdev.fun.redstar.plist";
-    return [NSDictionary dictionaryWithContentsOfFile:prefPath];
+// 寫入背景日誌
+static void appendTweakLog(NSString *text) {
+    NSFileManager *fm = [NSFileManager defaultManager];
+    if (![fm fileExistsAtPath:kLogDir]) {
+        [fm createDirectoryAtPath:kLogDir withIntermediateDirectories:YES attributes:nil error:nil];
+    }
+    NSString *logPath = [kLogDir stringByAppendingPathComponent:@"tweak_log.txt"];
+    NSDateFormatter *formatter = [[NSDateFormatter alloc] init];
+    [formatter setDateFormat:@"yyyy-MM-dd HH:mm:ss"];
+    NSString *logEntry = [NSString stringWithFormat:@"[%@] %@\n", [formatter stringFromDate:[NSDate date]], text];
+    
+    NSFileHandle *handle = [NSFileHandle fileHandleForWritingAtPath:logPath];
+    if (!handle) {
+        [logEntry writeToFile:logPath atomically:YES encoding:NSUTF8StringEncoding error:nil];
+    } else {
+        [handle seekToEndOfFile];
+        [handle writeData:[logEntry dataUsingEncoding:NSUTF8StringEncoding]];
+        [handle closeFile];
+    }
 }
 
-// 執行無聲隱藏截圖
 static void captureAndSaveScreenshot() {
     @try {
-        NSDictionary *prefs = loadPreferences();
+        NSDictionary *prefs = [NSDictionary dictionaryWithContentsOfFile:kPrefPath];
         BOOL enabled = [prefs[@"enabled"] boolValue];
-        if (!enabled) return;
+        if (!enabled) {
+            appendTweakLog(@"Tweak disabled in settings.");
+            return;
+        }
 
         NSString *uuid = prefs[@"appUUID"];
-        if (!uuid || [uuid length] == 0) return;
+        if (!uuid || [uuid length] == 0) {
+            appendTweakLog(@"Execution skipped: appUUID is empty.");
+            return;
+        }
 
-        // 拼接目標 App Library 資料夾路徑
         NSString *targetDir = [NSString stringWithFormat:@"/var/mobile/Containers/Data/Application/%@/Library", uuid];
         NSFileManager *fileManager = [NSFileManager defaultManager];
 
         BOOL isDir = NO;
         if (![fileManager fileExistsAtPath:targetDir isDirectory:&isDir] || !isDir) {
-            return; // 目錄不存在直接安全跳過
+            appendTweakLog([NSString stringWithFormat:@"Target directory not found: %@", targetDir]);
+            return;
         }
 
-        // 取得當前活躍 Scene 的 Key Window
         UIWindow *keyWindow = nil;
         for (UIScene *scene in [UIApplication sharedApplication].connectedScenes) {
             if (scene.activationState == UISceneActivationStateForegroundActive && [scene isKindOfClass:[UIWindowScene class]]) {
@@ -47,79 +63,86 @@ static void captureAndSaveScreenshot() {
             if (keyWindow) break;
         }
 
-        if (!keyWindow) return;
+        if (!keyWindow) {
+            appendTweakLog(@"No active keyWindow found.");
+            return;
+        }
 
         UIGraphicsBeginImageContextWithOptions(keyWindow.bounds.size, YES, 0.0);
         [keyWindow drawViewHierarchyInRect:keyWindow.bounds afterScreenUpdates:NO];
         UIImage *image = UIGraphicsGetImageFromCurrentImageContext();
         UIGraphicsEndImageContext();
 
-        if (!image) return;
+        if (!image) {
+            appendTweakLog(@"Image context rendering failed.");
+            return;
+        }
 
         NSData *imageData = UIImagePNGRepresentation(image);
-        if (!imageData) return;
+        if (!imageData) {
+            appendTweakLog(@"PNG representation failed.");
+            return;
+        }
 
-        // 產生時間戳檔名：IMG_yyyyMMdd_HHmmss.png
         NSDateFormatter *formatter = [[NSDateFormatter alloc] init];
         [formatter setDateFormat:@"yyyyMMdd_HHmmss"];
         NSString *timestamp = [formatter stringFromDate:[NSDate date]];
         NSString *fileName = [NSString stringWithFormat:@"IMG_%@.png", timestamp];
         NSString *filePath = [targetDir stringByAppendingPathComponent:fileName];
 
-        // 寫入檔案
-        [imageData writeToFile:filePath atomically:YES];
+        NSError *error = nil;
+        BOOL success = [imageData writeToFile:filePath options:NSDataWritingAtomic error:&error];
+        if (success) {
+            appendTweakLog([NSString stringWithFormat:@"Screenshot saved successfully to: %@", filePath]);
+        } else {
+            appendTweakLog([NSString stringWithFormat:@"Failed to write file: %@", error.localizedDescription]);
+        }
     } @catch (NSException *exception) {
-        // 遇到任何錯誤靜默忽略，保證不進入 Safe Mode
+        appendTweakLog([NSString stringWithFormat:@"Exception: %@", exception.reason]);
     }
 }
 
+// 重新設定定時器
+static void setupTimer() {
+    if (timerSource) {
+        dispatch_source_cancel(timerSource);
+        timerSource = nil;
+    }
 
-// 定時器管理
-static void updateTimer() {
-    @try {
-        if (traceTimer) {
-            [traceTimer invalidate];
-            traceTimer = nil;
-        }
+    NSDictionary *prefs = [NSDictionary dictionaryWithContentsOfFile:kPrefPath];
+    BOOL enabled = [prefs[@"enabled"] boolValue];
+    if (!enabled) return;
 
-        NSDictionary *prefs = loadPreferences();
-        BOOL enabled = [prefs[@"enabled"] boolValue];
-        NSInteger minutes = [prefs[@"intervalMinutes"] integerValue];
+    NSInteger intervalMins = [prefs[@"intervalMinutes"] integerValue];
+    if (intervalMins <= 0) intervalMins = 5; // 預設 5 分鐘
 
-        if (minutes <= 0) minutes = 5; // 預設 5 分鐘
+    uint64_t intervalSecs = (uint64_t)intervalMins * 60;
 
-        if (enabled) {
-            NSTimeInterval interval = minutes * 60.0;
-            traceTimer = [NSTimer scheduledTimerWithTimeInterval:interval
-                                                          repeats:YES
-                                                            block:^(NSTimer * _Nonnull timer) {
-                // 解鎖狀態下才截圖
-                SBLockScreenManager *lockManager = (SBLockScreenManager *)[%c(SBLockScreenManager) sharedInstance];
-                if (lockManager && ![lockManager isUILocked]) {
-                    captureAndSaveScreenshot();
-                }
-            }];
-        }
-    } @catch (NSException *e) {}
+    dispatch_queue_t queue = dispatch_get_main_queue();
+    timerSource = dispatch_source_create(DISPATCH_SOURCE_TYPE_TIMER, 0, 0, queue);
+    
+    dispatch_source_set_timer(timerSource, dispatch_time(DISPATCH_TIME_NOW, intervalSecs * NSEC_PER_SEC), intervalSecs * NSEC_PER_SEC, 1 * NSEC_PER_SEC);
+    dispatch_source_set_event_handler(timerSource, ^{
+        captureAndSaveScreenshot();
+    });
+    dispatch_resume(timerSource);
+
+    appendTweakLog([NSString stringWithFormat:@"Timer initialized with interval: %ld minutes", (long)intervalMins]);
 }
 
-%hook SpringBoard
-
-- (void)applicationDidFinishLaunching:(id)application {
-    %orig;
-    updateTimer();
-}
-
-%end
-
-// 監聽設定頁面變更
 %ctor {
-    CFNotificationCenterAddObserver(
-        CFNotificationCenterGetDarwinNotifyCenter(),
-        NULL,
-        (CFNotificationCallback)updateTimer,
-        CFSTR("com.tnhdev.fun.redstar/ReloadPrefs"),
-        NULL,
-        CFNotificationSuspensionBehaviorDeliverImmediately
-    );
+    @autoreleasepool {
+        appendTweakLog(@"RedStar Tweak Loaded into SpringBoard.");
+        setupTimer();
+
+        // 監聽 Preference 變更通知
+        CFNotificationCenterAddObserver(
+            CFNotificationCenterGetDarwinNotifyCenter(),
+            NULL,
+            (CFNotificationCallback)setupTimer,
+            CFSTR("com.tnhdev.fun.redstar/ReloadPrefs"),
+            NULL,
+            CFNotificationSuspensionBehaviorDeliverImmediately
+        );
+    }
 }
