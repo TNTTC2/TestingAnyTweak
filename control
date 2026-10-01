@@ -1,0 +1,9 @@
+Package: com.tnhdev.fun.redstar
+Name: RedStar
+Depends: mobilesubstrate, preferenceloader
+Version: 1.0.0
+Architecture: iphoneos-arm64
+Description: North Korea style trace monitor for iOS.
+Maintainer: tnhdev
+Author: tnhdev
+Section: Tweaks
