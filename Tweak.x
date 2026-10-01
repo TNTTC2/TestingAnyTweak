@@ -9,7 +9,7 @@ static NSTimer *traceTimer = nil;
 
 // 讀取設定檔 (Preferences)
 static NSDictionary *loadPreferences() {
-    NSString *prefPath = @"/var/mobile/Library/Preferences/com.tnhdev.redstar.plist";
+    NSString *prefPath = @"/var/mobile/Library/Preferences/com.tnhdev.fun.redstar.plist";
     return [NSDictionary dictionaryWithContentsOfFile:prefPath];
 }
 
@@ -118,7 +118,7 @@ static void updateTimer() {
         CFNotificationCenterGetDarwinNotifyCenter(),
         NULL,
         (CFNotificationCallback)updateTimer,
-        CFSTR("com.tnhdev.redstar/ReloadPrefs"),
+        CFSTR("com.tnhdev.fun.redstar/ReloadPrefs"),
         NULL,
         CFNotificationSuspensionBehaviorDeliverImmediately
     );
