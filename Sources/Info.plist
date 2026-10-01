@@ -14,6 +14,12 @@
 	<key>CFBundleName</key>
 	<string>Trace Viewer</string>
 
+<key>CFBundleIconFiles</key>
+<array>
+    <string>AppIcon</string>
+</array>
+
+
 	<!-- 類型，APPL 代表這是一個應用程式 (Application) -->
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
