@@ -17,7 +17,7 @@
 			<key>default</key>
 			<false/>
 			<key>defaults</key>
-			<string>com.tnhdev.redstar</string>
+			<string>com.tnhdev.fun.redstar</string>
 			<key>key</key>
 			<string>enabled</string>
 			<key>label</key>
@@ -81,7 +81,7 @@
 			<key>label</key>
 			<string>Diagnose &amp; Test</string>
 			<key>footerText</key>
-			<string>Logs will be saved to /var/jb/RedStar/test_log.txt</string>
+			<string>Logs will be saved to /var/mobile/Library/Logs/RedStar/test_log.txt</string>
 		</dict>
 		<dict>
 			<key>cell</key>
