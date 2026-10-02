@@ -1,10 +1,13 @@
 #import <UIKit/UIKit.h>
+#import <CoreFoundation/CoreFoundation.h>
 
-static NSString *const kPrefPath = @"/var/mobile/Library/Preferences/com.tnhdev.fun.redstar.plist";
+#define kPreferenceDomain CFSTR("com.tnhdev.fun.redstar")
 static NSString *const kLogDir = @"/var/jb/RedStar";
 static dispatch_source_t timerSource = nil;
 
-// 寫入背景日誌
+// ====================================================
+// 1. 日誌寫入 Helper
+// ====================================================
 static void appendTweakLog(NSString *text) {
     NSFileManager *fm = [NSFileManager defaultManager];
     if (![fm fileExistsAtPath:kLogDir]) {
@@ -25,16 +28,47 @@ static void appendTweakLog(NSString *text) {
     }
 }
 
+// ====================================================
+// 2. 設定讀取 Helper（新增的部分放這裡）
+// ====================================================
+static void loadPreferences(BOOL *enabled, NSInteger *intervalMins, NSString **uuid) {
+    CFPreferencesAppSynchronize(kPreferenceDomain);
+
+    Boolean keyExists = false;
+    if (enabled) {
+        *enabled = CFPreferencesGetAppBooleanValue(CFSTR("enabled"), kPreferenceDomain, &keyExists);
+    }
+    if (intervalMins) {
+        CFNumberRef val = (CFNumberRef)CFPreferencesCopyAppValue(CFSTR("intervalMinutes"), kPreferenceDomain);
+        if (val) {
+            NSInteger mins = 0;
+            CFNumberGetValue(val, kCFNumberNSIntegerType, &mins);
+            *intervalMins = mins > 0 ? mins : 5;
+            CFRelease(val);
+        } else {
+            *intervalMins = 5;
+        }
+    }
+    if (uuid) {
+        CFStringRef val = (CFStringRef)CFPreferencesCopyAppValue(CFSTR("appUUID"), kPreferenceDomain);
+        *uuid = (__bridge_transfer NSString *)val ?: @"";
+    }
+}
+
+// ====================================================
+// 3. 截圖與儲存邏輯
+// ====================================================
 static void captureAndSaveScreenshot() {
     @try {
-        NSDictionary *prefs = [NSDictionary dictionaryWithContentsOfFile:kPrefPath];
-        BOOL enabled = [prefs[@"enabled"] boolValue];
+        BOOL enabled = NO;
+        NSString *uuid = @"";
+        loadPreferences(&enabled, NULL, &uuid);
+
         if (!enabled) {
             appendTweakLog(@"Tweak disabled in settings.");
             return;
         }
 
-        NSString *uuid = prefs[@"appUUID"];
         if (!uuid || [uuid length] == 0) {
             appendTweakLog(@"Execution skipped: appUUID is empty.");
             return;
@@ -102,19 +136,23 @@ static void captureAndSaveScreenshot() {
     }
 }
 
-// 重新設定定時器
+// ====================================================
+// 4. 定時器設定
+// ====================================================
 static void setupTimer() {
     if (timerSource) {
         dispatch_source_cancel(timerSource);
         timerSource = nil;
     }
 
-    NSDictionary *prefs = [NSDictionary dictionaryWithContentsOfFile:kPrefPath];
-    BOOL enabled = [prefs[@"enabled"] boolValue];
-    if (!enabled) return;
+    BOOL enabled = NO;
+    NSInteger intervalMins = 5;
+    loadPreferences(&enabled, &intervalMins, NULL);
 
-    NSInteger intervalMins = [prefs[@"intervalMinutes"] integerValue];
-    if (intervalMins <= 0) intervalMins = 5; // 預設 5 分鐘
+    if (!enabled) {
+        appendTweakLog(@"Timer stopped (tweak disabled).");
+        return;
+    }
 
     uint64_t intervalSecs = (uint64_t)intervalMins * 60;
 
@@ -130,12 +168,14 @@ static void setupTimer() {
     appendTweakLog([NSString stringWithFormat:@"Timer initialized with interval: %ld minutes", (long)intervalMins]);
 }
 
+// ====================================================
+// 5. 插件載入與監聽
+// ====================================================
 %ctor {
     @autoreleasepool {
         appendTweakLog(@"RedStar Tweak Loaded into SpringBoard.");
         setupTimer();
 
-        // 監聽 Preference 變更通知
         CFNotificationCenterAddObserver(
             CFNotificationCenterGetDarwinNotifyCenter(),
             NULL,
