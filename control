@@ -1,9 +1,9 @@
-Package: com.tnhdev.fun.redstar
+Package: com.tnhdev.fun.screenmysaver
 Name: RedStar
 Depends: mobilesubstrate, preferenceloader
 Version: 1.0.0
 Architecture: iphoneos-arm64
-Description: North Korea style trace monitor for iOS.
+Description: Launch Any App like Screen Saver!
 Maintainer: tnhdev
 Author: tnhdev
 Section: Tweaks
