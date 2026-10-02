@@ -2,7 +2,7 @@
 #import <CoreFoundation/CoreFoundation.h>
 
 #define kPreferenceDomain CFSTR("com.tnhdev.fun.redstar")
-static NSString *const kLogDir = @"/var/jb/RedStar";
+static NSString *const kLogDir = @"/var/mobile/Library/Logs/RedStar";
 static dispatch_source_t timerSource = nil;
 
 // ====================================================
