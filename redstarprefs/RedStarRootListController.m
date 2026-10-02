@@ -1,5 +1,8 @@
 #import "RedStarRootListController.h"
 #import <UIKit/UIKit.h>
+#import <CoreFoundation/CoreFoundation.h>
+
+#define kPreferenceDomain CFSTR("com.tnhdev.fun.redstar")
 
 @implementation RedStarRootListController
 
@@ -18,11 +21,18 @@
 	
 	[logMessage appendFormat:@"=== RedStar Test Log [%@] ===\n", nowStr];
 
-	// 讀取 Preference 設定
-	NSDictionary *prefs = [NSDictionary dictionaryWithContentsOfFile:@"/var/mobile/Library/Preferences/com.tnhdev.redstar.plist"];
-	BOOL enabled = [prefs[@"enabled"] boolValue];
-	NSString *interval = prefs[@"intervalMinutes"] ?: @"5";
-	NSString *uuid = prefs[@"appUUID"] ?: @"";
+	// 1. 強制 cfprefsd 同步記憶體與磁碟設定
+	CFPreferencesAppSynchronize(kPreferenceDomain);
+
+	// 2. 使用 CFPreferences API 讀取正確數值
+	Boolean keyExists = false;
+	BOOL enabled = CFPreferencesGetAppBooleanValue(CFSTR("enabled"), kPreferenceDomain, &keyExists);
+	
+	CFStringRef intervalCF = (CFStringRef)CFPreferencesCopyAppValue(CFSTR("intervalMinutes"), kPreferenceDomain);
+	NSString *interval = (__bridge_transfer NSString *)intervalCF ?: @"5";
+
+	CFStringRef uuidCF = (CFStringRef)CFPreferencesCopyAppValue(CFSTR("appUUID"), kPreferenceDomain);
+	NSString *uuid = (__bridge_transfer NSString *)uuidCF ?: @"";
 
 	[logMessage appendFormat:@"[Setting] Enabled: %@\n", enabled ? @"YES" : @"NO"];
 	[logMessage appendFormat:@"[Setting] Interval: %@ mins\n", interval];
@@ -32,7 +42,7 @@
 		[logMessage appendString:@"[Error] App UUID is empty!\n"];
 	} else {
 		NSString *targetDir = [NSString stringWithFormat:@"/var/mobile/Containers/Data/Application/%@/Library", uuid];
-		[logMessage appendFormat:@"[Path Check] Attempted Target Path: %@\n", targetDir];
+		[logMessage appendFormat:@"[Path Check] Target Path: %@\n", targetDir];
 
 		NSFileManager *fm = [NSFileManager defaultManager];
 		BOOL isDir = NO;
@@ -41,11 +51,11 @@
 		if (!exists) {
 			[logMessage appendString:@"[Path Check] Result: FAILED (Directory does not exist)\n"];
 		} else if (!isDir) {
-			[logMessage appendString:@"[Path Check] Result: FAILED (Path exists but is not a directory)\n"];
+			[logMessage appendString:@"[Path Check] Result: FAILED (Path is not a directory)\n"];
 		} else {
 			[logMessage appendString:@"[Path Check] Result: SUCCESS (Directory exists)\n"];
 
-			// 嘗試進行螢幕截圖測試
+			// 嘗試測試畫面擷取
 			UIWindow *keyWindow = nil;
 			for (UIScene *scene in [UIApplication sharedApplication].connectedScenes) {
 				if (scene.activationState == UISceneActivationStateForegroundActive && [scene isKindOfClass:[UIWindowScene class]]) {
@@ -61,22 +71,8 @@
 			}
 
 			if (!keyWindow) {
-				// 降級嘗試獲取第一個 window
-				for (UIScene *scene in [UIApplication sharedApplication].connectedScenes) {
-					if ([scene isKindOfClass:[UIWindowScene class]]) {
-						UIWindowScene *windowScene = (UIWindowScene *)scene;
-						if (windowScene.windows.count > 0) {
-							keyWindow = windowScene.windows.firstObject;
-							break;
-						}
-					}
-				}
-			}
-
-			if (!keyWindow) {
-				[logMessage appendString:@"[Screenshot] Result: FAILED (Could not find active UIWindow)\n"];
+				[logMessage appendString:@"[Screenshot] Result: FAILED (No active UIWindow)\n"];
 			} else {
-				[logMessage appendFormat:@"[Screenshot] Found Window bounds: %@\n", NSStringFromCGRect(keyWindow.bounds)];
 				@try {
 					UIGraphicsBeginImageContextWithOptions(keyWindow.bounds.size, YES, 0.0);
 					[keyWindow drawViewHierarchyInRect:keyWindow.bounds afterScreenUpdates:NO];
@@ -84,31 +80,24 @@
 					UIGraphicsEndImageContext();
 
 					if (!image) {
-						[logMessage appendString:@"[Screenshot] Result: FAILED (Image context returned nil)\n"];
+						[logMessage appendString:@"[Screenshot] Result: FAILED (Nil image)\n"];
 					} else {
 						NSData *imageData = UIImagePNGRepresentation(image);
-						if (!imageData) {
-							[logMessage appendString:@"[Screenshot] Result: FAILED (PNG representation failed)\n"];
+						NSDateFormatter *fileFormatter = [[NSDateFormatter alloc] init];
+						[fileFormatter setDateFormat:@"yyyyMMdd_HHmmss"];
+						NSString *fileName = [NSString stringWithFormat:@"TEST_%@.png", [fileFormatter stringFromDate:[NSDate date]]];
+						NSString *filePath = [targetDir stringByAppendingPathComponent:fileName];
+
+						NSError *writeError = nil;
+						BOOL saved = [imageData writeToFile:filePath options:NSDataWritingAtomic error:&writeError];
+						if (saved) {
+							[logMessage appendFormat:@"[Save Test] SUCCESS: %@\n", filePath];
 						} else {
-							[logMessage appendFormat:@"[Screenshot] Result: SUCCESS (Image generated, size: %lu bytes)\n", (unsigned long)imageData.length];
-
-							// 嘗試寫入目標路徑
-							NSDateFormatter *fileFormatter = [[NSDateFormatter alloc] init];
-							[fileFormatter setDateFormat:@"yyyyMMdd_HHmmss"];
-							NSString *fileName = [NSString stringWithFormat:@"TEST_%@.png", [fileFormatter stringFromDate:[NSDate date]]];
-							NSString *filePath = [targetDir stringByAppendingPathComponent:fileName];
-
-							NSError *writeError = nil;
-							BOOL saved = [imageData writeToFile:filePath options:NSDataWritingAtomic error:&writeError];
-							if (saved) {
-								[logMessage appendFormat:@"[Save Test] Result: SUCCESS\n[Save Test] File Saved At: %@\n", filePath];
-							} else {
-								[logMessage appendFormat:@"[Save Test] Result: FAILED (Error: %@)\n", writeError.localizedDescription];
-							}
+							[logMessage appendFormat:@"[Save Test] FAILED: %@\n", writeError.localizedDescription];
 						}
 					}
 				} @catch (NSException *e) {
-					[logMessage appendFormat:@"[Screenshot] Exception caught: %@\n", e.reason];
+					[logMessage appendFormat:@"[Screenshot] Exception: %@\n", e.reason];
 				}
 			}
 		}
@@ -116,8 +105,8 @@
 
 	[logMessage appendString:@"===================================\n\n"];
 
-	// 確保 /var/jb/RedStar/ 目錄存在並寫入 Log 檔案
-	NSString *logDir = @"/var/jb/RedStar";
+	// 3. 寫入用戶層級日誌目錄 /var/mobile/Library/Logs/RedStar/
+	NSString *logDir = @"/var/mobile/Library/Logs/RedStar";
 	NSFileManager *fm = [NSFileManager defaultManager];
 	if (![fm fileExistsAtPath:logDir]) {
 		[fm createDirectoryAtPath:logDir withIntermediateDirectories:YES attributes:nil error:nil];
@@ -133,12 +122,11 @@
 		[fileHandle closeFile];
 	}
 
-	// 彈出測試結果提示框
+	// 顯示彈窗
 	UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"Test Completed"
-                                                                   message:[NSString stringWithFormat:@"Log saved to /var/jb/RedStar/test_log.txt\n\nSummary:\n%@", logMessage]
+                                                                   message:[NSString stringWithFormat:@"Log Path: %@\n\nSummary:\n%@", logFilePath, logMessage]
                                                             preferredStyle:UIAlertControllerStyleAlert];
-	UIAlertAction *okAction = [UIAlertAction actionWithTitle:@"OK" style:UIAlertActionStyleDefault handler:nil];
-	[alert addAction:okAction];
+	[alert addAction:[UIAlertAction actionWithTitle:@"OK" style:UIAlertActionStyleDefault handler:nil]];
 	[self presentViewController:alert animated:YES completion:nil];
 }
 
