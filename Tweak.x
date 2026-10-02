@@ -1,187 +1,218 @@
 #import <UIKit/UIKit.h>
 #import <CoreFoundation/CoreFoundation.h>
+#import <dlfcn.h>
 
-#define kPreferenceDomain CFSTR("com.tnhdev.fun.redstar")
-static NSString *const kLogDir = @"/var/mobile/Library/Logs/RedStar";
-static dispatch_source_t timerSource = nil;
+#define kPreferenceDomain CFSTR("com.tnhdev.fun.screenmysaver")
 
-// ====================================================
-// 1. 日誌寫入 Helper
-// ====================================================
-static void appendTweakLog(NSString *text) {
-    NSFileManager *fm = [NSFileManager defaultManager];
-    if (![fm fileExistsAtPath:kLogDir]) {
-        [fm createDirectoryAtPath:kLogDir withIntermediateDirectories:YES attributes:nil error:nil];
-    }
-    NSString *logPath = [kLogDir stringByAppendingPathComponent:@"tweak_log.txt"];
-    NSDateFormatter *formatter = [[NSDateFormatter alloc] init];
-    [formatter setDateFormat:@"yyyy-MM-dd HH:mm:ss"];
-    NSString *logEntry = [NSString stringWithFormat:@"[%@] %@\n", [formatter stringFromDate:[NSDate date]], text];
-    
-    NSFileHandle *handle = [NSFileHandle fileHandleForWritingAtPath:logPath];
-    if (!handle) {
-        [logEntry writeToFile:logPath atomically:YES encoding:NSUTF8StringEncoding error:nil];
-    } else {
-        [handle seekToEndOfFile];
-        [handle writeData:[logEntry dataUsingEncoding:NSUTF8StringEncoding]];
-        [handle closeFile];
-    }
-}
+// Private Interfaces
+@interface LSApplicationWorkspace : NSObject
++ (id)defaultWorkspace;
+- (BOOL)openApplicationWithBundleID:(NSString *)bundleID;
+@end
 
-// ====================================================
-// 2. 設定讀取 Helper（安全轉換版）
-// ====================================================
-static void loadPreferences(BOOL *enabled, NSInteger *intervalMins, NSString **uuid) {
+@interface SBLockScreenManager : NSObject
++ (id)sharedInstance;
+- (BOOL)isUILocked;
+@end
+
+@interface SpringBoard : UIApplication
+- (NSString *)_accessibilityFrontMostApplicationDisplayIdentifier;
+@end
+
+// State Variables
+static dispatch_source_t stage1Timer = nil;
+static dispatch_source_t stage2Timer = nil;
+static BOOL isInStage2 = NO;
+
+// 安全讀取 Preference 數值（自動將 NSString 轉換為整數，並進行 >= 30 限制）
+static void loadPrefs(BOOL *enabled, BOOL *allowLowPower, NSInteger *cooldown, NSInteger *wait, NSString **targetBundleID) {
     CFPreferencesAppSynchronize(kPreferenceDomain);
 
     Boolean keyExists = false;
     if (enabled) {
         *enabled = CFPreferencesGetAppBooleanValue(CFSTR("enabled"), kPreferenceDomain, &keyExists);
     }
-    if (intervalMins) {
-        // PSEditTextCell 儲存的是文字 (例如 @"5")，需當作 String 讀取後轉為整數
-        CFStringRef val = (CFStringRef)CFPreferencesCopyAppValue(CFSTR("intervalMinutes"), kPreferenceDomain);
+    if (allowLowPower) {
+        *allowLowPower = CFPreferencesGetAppBooleanValue(CFSTR("allowLowPowerMode"), kPreferenceDomain, &keyExists);
+    }
+    if (cooldown) {
+        CFStringRef val = (CFStringRef)CFPreferencesCopyAppValue(CFSTR("cooldownTime"), kPreferenceDomain);
         if (val) {
-            NSString *strVal = (__bridge_transfer NSString *)val;
-            NSInteger mins = [strVal integerValue];
-            *intervalMins = mins > 0 ? mins : 5;
+            NSInteger c = [(__bridge_transfer NSString *)val integerValue];
+            *cooldown = c >= 30 ? c : 30;
         } else {
-            *intervalMins = 5;
+            *cooldown = 300;
         }
     }
-    if (uuid) {
-        CFStringRef val = (CFStringRef)CFPreferencesCopyAppValue(CFSTR("appUUID"), kPreferenceDomain);
-        *uuid = (__bridge_transfer NSString *)val ?: @"";
+    if (wait) {
+        CFStringRef val = (CFStringRef)CFPreferencesCopyAppValue(CFSTR("waitTime"), kPreferenceDomain);
+        if (val) {
+            NSInteger w = [(__bridge_transfer NSString *)val integerValue];
+            *wait = w >= 30 ? w : 30;
+        } else {
+            *wait = 30;
+        }
+    }
+    if (targetBundleID) {
+        CFStringRef val = (CFStringRef)CFPreferencesCopyAppValue(CFSTR("targetBundleID"), kPreferenceDomain);
+        *targetBundleID = (__bridge_transfer NSString *)val ?: @"";
     }
 }
 
+// 動態檢測 MediaRemote 是否有媒體正在播放
+static BOOL isMediaPlaying() {
+    BOOL (*MRMediaRemoteGetNowPlayingApplicationIsPlaying)(dispatch_queue_t queue, void (^completion)(BOOL isPlaying)) = NULL;
+    void *handle = dlopen("/System/Library/PrivateFrameworks/MediaRemote.framework/MediaRemote", RTLD_LAZY);
+    if (handle) {
+        MRMediaRemoteGetNowPlayingApplicationIsPlaying = dlsym(handle, "MRMediaRemoteGetNowPlayingApplicationIsPlaying");
+    }
 
-// ====================================================
-// 3. 截圖與儲存邏輯
-// ====================================================
-static void captureAndSaveScreenshot() {
-    @try {
-        BOOL enabled = NO;
-        NSString *uuid = @"";
-        loadPreferences(&enabled, NULL, &uuid);
+    __block BOOL playing = NO;
+    if (MRMediaRemoteGetNowPlayingApplicationIsPlaying) {
+        dispatch_semaphore_t sema = dispatch_semaphore_create(0);
+        MRMediaRemoteGetNowPlayingApplicationIsPlaying(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^(BOOL isPlaying) {
+            playing = isPlaying;
+            dispatch_semaphore_signal(sema);
+        });
+        dispatch_semaphore_wait(sema, dispatch_time(DISPATCH_TIME_NOW, 100 * NSEC_PER_MSEC));
+    }
+    return playing;
+}
 
-        if (!enabled) {
-            appendTweakLog(@"Tweak disabled in settings.");
-            return;
-        }
+static void cancelStage2AndReset() {
+    if (stage2Timer) {
+        dispatch_source_cancel(stage2Timer);
+        stage2Timer = nil;
+    }
+    isInStage2 = NO;
+}
 
-        if (!uuid || [uuid length] == 0) {
-            appendTweakLog(@"Execution skipped: appUUID is empty.");
-            return;
-        }
-
-        NSString *targetDir = [NSString stringWithFormat:@"/var/mobile/Containers/Data/Application/%@/Library", uuid];
-        NSFileManager *fileManager = [NSFileManager defaultManager];
-
-        BOOL isDir = NO;
-        if (![fileManager fileExistsAtPath:targetDir isDirectory:&isDir] || !isDir) {
-            appendTweakLog([NSString stringWithFormat:@"Target directory not found: %@", targetDir]);
-            return;
-        }
-
-        UIWindow *keyWindow = nil;
-        for (UIScene *scene in [UIApplication sharedApplication].connectedScenes) {
-            if (scene.activationState == UISceneActivationStateForegroundActive && [scene isKindOfClass:[UIWindowScene class]]) {
-                UIWindowScene *windowScene = (UIWindowScene *)scene;
-                for (UIWindow *window in windowScene.windows) {
-                    if (window.isKeyWindow) {
-                        keyWindow = window;
-                        break;
-                    }
-                }
-            }
-            if (keyWindow) break;
-        }
-
-        if (!keyWindow) {
-            appendTweakLog(@"No active keyWindow found.");
-            return;
-        }
-
-        UIGraphicsBeginImageContextWithOptions(keyWindow.bounds.size, YES, 0.0);
-        [keyWindow drawViewHierarchyInRect:keyWindow.bounds afterScreenUpdates:NO];
-        UIImage *image = UIGraphicsGetImageFromCurrentImageContext();
-        UIGraphicsEndImageContext();
-
-        if (!image) {
-            appendTweakLog(@"Image context rendering failed.");
-            return;
-        }
-
-        NSData *imageData = UIImagePNGRepresentation(image);
-        if (!imageData) {
-            appendTweakLog(@"PNG representation failed.");
-            return;
-        }
-
-        NSDateFormatter *formatter = [[NSDateFormatter alloc] init];
-        [formatter setDateFormat:@"yyyyMMdd_HHmmss"];
-        NSString *timestamp = [formatter stringFromDate:[NSDate date]];
-        NSString *fileName = [NSString stringWithFormat:@"IMG_%@.png", timestamp];
-        NSString *filePath = [targetDir stringByAppendingPathComponent:fileName];
-
-        NSError *error = nil;
-        BOOL success = [imageData writeToFile:filePath options:NSDataWritingAtomic error:&error];
-        if (success) {
-            appendTweakLog([NSString stringWithFormat:@"Screenshot saved successfully to: %@", filePath]);
-        } else {
-            appendTweakLog([NSString stringWithFormat:@"Failed to write file: %@", error.localizedDescription]);
-        }
-    } @catch (NSException *exception) {
-        appendTweakLog([NSString stringWithFormat:@"Exception: %@", exception.reason]);
+// 開啟目標 App
+static void launchTargetApp(NSString *bundleID) {
+    if (!bundleID || [bundleID length] == 0) return;
+    LSApplicationWorkspace *workspace = [NSClassFromString(@"LSApplicationWorkspace") defaultWorkspace];
+    if ([workspace respondsToSelector:@selector(openApplicationWithBundleID:)]) {
+        [workspace openApplicationWithBundleID:bundleID];
     }
 }
 
-// ====================================================
-// 4. 定時器設定
-// ====================================================
-static void setupTimer() {
-    if (timerSource) {
-        dispatch_source_cancel(timerSource);
-        timerSource = nil;
+// 檢查系統當前是否處於可觸發屏保的閒置狀態
+static BOOL isSystemIdle(NSString *targetBundleID, BOOL allowLowPower) {
+    // 1. 低電量模式檢查
+    if (!allowLowPower && [[NSProcessInfo processInfo] isLowPowerModeEnabled]) {
+        return NO;
     }
 
-    BOOL enabled = NO;
-    NSInteger intervalMins = 5;
-    loadPreferences(&enabled, &intervalMins, NULL);
-
-    if (!enabled) {
-        appendTweakLog(@"Timer stopped (tweak disabled).");
-        return;
+    // 2. 鎖定畫面檢查
+    SBLockScreenManager *lockManager = [NSClassFromString(@"SBLockScreenManager") sharedInstance];
+    if ([lockManager isUILocked]) {
+        return NO;
     }
 
-    uint64_t intervalSecs = (uint64_t)intervalMins * 60;
+    // 3. 影音播放檢查
+    if (isMediaPlaying()) {
+        return NO;
+    }
+
+    // 4. 前台 App 檢查（若當前前台已經是目標 App 則跳過）
+    SpringBoard *sb = (SpringBoard *)[UIApplication sharedApplication];
+    if ([sb respondsToSelector:@selector(_accessibilityFrontMostApplicationDisplayIdentifier)]) {
+        NSString *currentApp = [sb _accessibilityFrontMostApplicationDisplayIdentifier];
+        if ([currentApp isEqualToString:targetBundleID]) {
+            return NO;
+        }
+    }
+
+    return YES;
+}
+
+// 第二階段：等待倒數計時
+static void startStage2Countdown(NSInteger waitTimeSeconds, NSString *targetBundleID) {
+    cancelStage2AndReset();
+    isInStage2 = YES;
 
     dispatch_queue_t queue = dispatch_get_main_queue();
-    timerSource = dispatch_source_create(DISPATCH_SOURCE_TYPE_TIMER, 0, 0, queue);
-    
-    dispatch_source_set_timer(timerSource, dispatch_time(DISPATCH_TIME_NOW, intervalSecs * NSEC_PER_SEC), intervalSecs * NSEC_PER_SEC, 1 * NSEC_PER_SEC);
-    dispatch_source_set_event_handler(timerSource, ^{
-        captureAndSaveScreenshot();
-    });
-    dispatch_resume(timerSource);
+    stage2Timer = dispatch_source_create(DISPATCH_SOURCE_TYPE_TIMER, 0, 0, queue);
 
-    appendTweakLog([NSString stringWithFormat:@"Timer initialized with interval: %ld minutes", (long)intervalMins]);
+    dispatch_source_set_timer(stage2Timer, dispatch_time(DISPATCH_TIME_NOW, (int64_t)(waitTimeSeconds * NSEC_PER_SEC)), DISPATCH_TIME_FOREVER, 1 * NSEC_PER_SEC);
+    dispatch_source_set_event_handler(stage2Timer, ^{
+        isInStage2 = NO;
+        stage2Timer = nil;
+
+        BOOL enabled = NO;
+        BOOL allowLowPower = NO;
+        NSString *bundleID = @"";
+        loadPrefs(&enabled, &allowLowPower, NULL, NULL, &bundleID);
+
+        // 倒數結束，二次確認無誤後直接拉起 App
+        if (enabled && isSystemIdle(bundleID, allowLowPower)) {
+            launchTargetApp(bundleID);
+        }
+    });
+    dispatch_resume(stage2Timer);
 }
 
-// ====================================================
-// 5. 插件載入與監聽
-// ====================================================
+// 第一階段：冷卻檢查週期
+static void startStage1Timer() {
+    if (stage1Timer) {
+        dispatch_source_cancel(stage1Timer);
+        stage1Timer = nil;
+    }
+    cancelStage2AndReset();
+
+    BOOL enabled = NO;
+    BOOL allowLowPower = NO;
+    NSInteger cooldown = 300;
+    NSInteger wait = 30;
+    NSString *bundleID = @"";
+    loadPrefs(&enabled, &allowLowPower, &cooldown, &wait, &bundleID);
+
+    if (!enabled || [bundleID length] == 0) return;
+
+    dispatch_queue_t queue = dispatch_get_main_queue();
+    stage1Timer = dispatch_source_create(DISPATCH_SOURCE_TYPE_TIMER, 0, 0, queue);
+
+    dispatch_source_set_timer(stage1Timer, dispatch_time(DISPATCH_TIME_NOW, (int64_t)(cooldown * NSEC_PER_SEC)), (uint64_t)cooldown * NSEC_PER_SEC, 1 * NSEC_PER_SEC);
+    dispatch_source_set_event_handler(stage1Timer, ^{
+        if (isInStage2) return;
+
+        if (isSystemIdle(bundleID, allowLowPower)) {
+            startStage2Countdown(wait, bundleID);
+        }
+    });
+    dispatch_resume(stage1Timer);
+}
+
+// Hook SpringBoard 全域觸控事件：若在第二階段收到任何觸控，立即中斷倒數
+%hook SpringBoard
+
+- (void)sendEvent:(UIEvent *)event {
+    %orig;
+    if (event.type == UIEventTypeTouches) {
+        NSSet *touches = [event allTouches];
+        for (UITouch *touch in touches) {
+            if (touch.phase == UITouchPhaseBegan || touch.phase == UITouchPhaseMoved) {
+                if (isInStage2) {
+                    cancelStage2AndReset();
+                }
+                break;
+            }
+        }
+    }
+}
+
+%end
+
+// 插件載入與 Preference 變更動態刷新
 %ctor {
     @autoreleasepool {
-        appendTweakLog(@"RedStar Tweak Loaded into SpringBoard.");
-        setupTimer();
+        startStage1Timer();
 
         CFNotificationCenterAddObserver(
             CFNotificationCenterGetDarwinNotifyCenter(),
             NULL,
-            (CFNotificationCallback)setupTimer,
-            CFSTR("com.tnhdev.fun.redstar/ReloadPrefs"),
+            (CFNotificationCallback)startStage1Timer,
+            CFSTR("com.tnhdev.fun.screenmysaver/ReloadPrefs"),
             NULL,
             CFNotificationSuspensionBehaviorDeliverImmediately
         );
