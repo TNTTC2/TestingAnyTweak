@@ -1,4 +1,4 @@
-name: Build RedStar Rootless Tweak (.deb)
+name: Build ScreenMySaver Rootless Tweak (.deb)
 
 on:
   push:
@@ -37,5 +37,5 @@ jobs:
     - name: Upload .deb Artifact
       uses: actions/upload-artifact@v4
       with:
-        name: RedStar-Deb
+        name: ScreenMySaver-Deb
         path: packages/*.deb
