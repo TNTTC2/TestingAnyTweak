@@ -1,5 +1,5 @@
 Package: com.tnhdev.fun.screenmysaver
-Name: RedStar
+Name: ScreenMySaver
 Depends: mobilesubstrate, preferenceloader
 Version: 1.0.0
 Architecture: iphoneos-arm64
