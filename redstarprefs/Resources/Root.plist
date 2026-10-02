@@ -23,7 +23,7 @@
 			<key>label</key>
 			<string>Enabled</string>
 			<key>PostNotification</key>
-			<string>com.tnhdev.redstar/ReloadPrefs</string>
+			<string>com.tnhdev.fun.redstar/ReloadPrefs</string>
 		</dict>
 
 		<!-- 週期設定 -->
@@ -39,7 +39,7 @@
 			<key>default</key>
 			<string>5</string>
 			<key>defaults</key>
-			<string>com.tnhdev.redstar</string>
+			<string>com.tnhdev.fun.redstar</string>
 			<key>key</key>
 			<string>intervalMinutes</string>
 			<key>placeholder</key>
@@ -47,7 +47,7 @@
 			<key>isNumeric</key>
 			<true/>
 			<key>PostNotification</key>
-			<string>com.tnhdev.redstar/ReloadPrefs</string>
+			<string>com.tnhdev.fun.redstar/ReloadPrefs</string>
 		</dict>
 
 		<!-- UUID 設定 -->
