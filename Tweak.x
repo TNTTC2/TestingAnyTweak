@@ -29,7 +29,7 @@ static void appendTweakLog(NSString *text) {
 }
 
 // ====================================================
-// 2. 設定讀取 Helper（新增的部分放這裡）
+// 2. 設定讀取 Helper（安全轉換版）
 // ====================================================
 static void loadPreferences(BOOL *enabled, NSInteger *intervalMins, NSString **uuid) {
     CFPreferencesAppSynchronize(kPreferenceDomain);
@@ -39,12 +39,12 @@ static void loadPreferences(BOOL *enabled, NSInteger *intervalMins, NSString **u
         *enabled = CFPreferencesGetAppBooleanValue(CFSTR("enabled"), kPreferenceDomain, &keyExists);
     }
     if (intervalMins) {
-        CFNumberRef val = (CFNumberRef)CFPreferencesCopyAppValue(CFSTR("intervalMinutes"), kPreferenceDomain);
+        // PSEditTextCell 儲存的是文字 (例如 @"5")，需當作 String 讀取後轉為整數
+        CFStringRef val = (CFStringRef)CFPreferencesCopyAppValue(CFSTR("intervalMinutes"), kPreferenceDomain);
         if (val) {
-            NSInteger mins = 0;
-            CFNumberGetValue(val, kCFNumberNSIntegerType, &mins);
+            NSString *strVal = (__bridge_transfer NSString *)val;
+            NSInteger mins = [strVal integerValue];
             *intervalMins = mins > 0 ? mins : 5;
-            CFRelease(val);
         } else {
             *intervalMins = 5;
         }
@@ -54,6 +54,7 @@ static void loadPreferences(BOOL *enabled, NSInteger *intervalMins, NSString **u
         *uuid = (__bridge_transfer NSString *)val ?: @"";
     }
 }
+
 
 // ====================================================
 // 3. 截圖與儲存邏輯
