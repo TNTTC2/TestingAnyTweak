@@ -3,12 +3,13 @@ THEOS_PACKAGE_SCHEME = rootless
 
 include $(THEOS)/makefiles/common.mk
 
-TWEAK_NAME = RedStar
+TWEAK_NAME = ScreenMySaver
 
-RedStar_FILES = Tweak.x
-RedStar_CFLAGS = -fobjc-arc
-RedStar_FRAMEWORKS = UIKit CoreGraphics
+ScreenMySaver_FILES = Tweak.x
+ScreenMySaver_CFLAGS = -fobjc-arc
+ScreenMySaver_LDFLAGS = -Wl,-undefined,dynamic_lookup
+ScreenMySaver_FRAMEWORKS = UIKit CoreGraphics
 
-include $(THEOS)/makefiles/tweak.mk
-SUBPROJECTS += redstarprefs
+include $(THEOS_MAKE_PATH)/tweak.mk
+SUBPROJECTS += screenmysaverprefs
 include $(THEOS_MAKE_PATH)/aggregate.mk
