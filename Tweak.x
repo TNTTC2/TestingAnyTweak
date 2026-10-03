@@ -123,6 +123,9 @@ static void loadPreferences() {
 @interface PressHBButton : UIView
 @property (nonatomic, assign) BOOL isHiddenTemporarily;
 @property (nonatomic, strong) NSTimer *hideTimer;
+
+// 3D Touch 狀態標記
+@property (nonatomic, assign) BOOL isDeepPressed;
 @property (nonatomic, assign) BOOL was3DTriggeredInCurrentTouch;
 @end
 
@@ -146,7 +149,7 @@ static void loadPreferences() {
     [generator impactOccurred];
 }
 
-// 淡出隱藏 5 秒（期間保持隱藏狀態）
+// 淡出隱藏 5 秒（輕點專用）
 - (void)fadeAndHideFor5Seconds {
     self.isHiddenTemporarily = YES;
     [UIView animateWithDuration:0.1 animations:^{
@@ -163,17 +166,19 @@ static void loadPreferences() {
     }];
 }
 
+// 觸控開始
 - (void)touchesBegan:(NSSet<UITouch *> *)touches withEvent:(UIEvent *)event {
     [super touchesBegan:touches withEvent:event];
     if (self.isHiddenTemporarily) return;
 
-    self.was3DTriggeredInCurrentTouch = NO;
-    self.alpha = 0.8;
-
     if (gSettings.touchMode == 0) { // 3D Touch 模式
+        self.isDeepPressed = NO;
+        self.was3DTriggeredInCurrentTouch = NO;
+        // 注意：輕觸時不改變不透明度，保持 idleOpacity，只有真正達到力度門檻才變高亮
         UITouch *touch = [touches anyObject];
         [self handle3DTouchForce:touch];
-    } else { // Haptic Touch 模式：直接發送 Down 訊號，其餘由系統計算
+    } else { // Haptic Touch 模式
+        self.alpha = 0.8;
         [self triggerFeedback];
         sendHomeButtonHIDEvent(YES);
     }
@@ -189,32 +194,51 @@ static void loadPreferences() {
     }
 }
 
+// 處理 3D Touch 力度變化
 - (void)handle3DTouchForce:(UITouch *)touch {
     CGFloat force = touch.force;
     CGFloat threshold = 1.5;
 
-    if (force >= threshold && !self.was3DTriggeredInCurrentTouch) {
+    if (force >= threshold && !self.isDeepPressed) {
+        // 壓下去！
+        self.isDeepPressed = YES;
         self.was3DTriggeredInCurrentTouch = YES;
+        self.alpha = 0.8; // 成功重壓才變亮
         [self triggerFeedback];
-        sendHomeButtonHIDEvent(YES);
+        sendHomeButtonHIDEvent(YES); // 發送 Home DOWN
+    } else if (force < threshold - 0.3 && self.isDeepPressed) {
+        // 鬆手/減壓放開！
+        [self process3DTouchRelease];
     }
+}
+
+// 3D Touch 鬆手/放開重壓邏輯
+- (void)process3DTouchRelease {
+    self.isDeepPressed = NO;
+    self.alpha = gSettings.idleOpacity;
+    [self triggerFeedback];
+    sendHomeButtonHIDEvent(NO); // 發送 Home UP
 }
 
 - (void)touchesEnded:(NSSet<UITouch *> *)touches withEvent:(UIEvent *)event {
     [super touchesEnded:touches withEvent:event];
     if (self.isHiddenTemporarily) return;
 
-    self.alpha = gSettings.idleOpacity;
-
     if (gSettings.touchMode == 0) { // 3D Touch 模式
-        if (self.was3DTriggeredInCurrentTouch) {
-            // 成功觸發重壓：發送 Up 訊號，不隱藏
-            sendHomeButtonHIDEvent(NO);
-        } else {
-            // 輕點未達門檻：隱藏 5 秒
+        if (self.isDeepPressed) {
+            // 手指離開螢幕時仍在重壓狀態：執行放開 Home 鍵
+            [self process3DTouchRelease];
+        } else if (!self.was3DTriggeredInCurrentTouch) {
+            // 未曾達到重壓門檻的快速輕點放手：隱藏 5 秒
             [self fadeAndHideFor5Seconds];
+        } else {
+            // 曾重壓但放手過程中力度已先降回門檻以下（前面已執行過 release）
+            self.alpha = gSettings.idleOpacity;
         }
-    } else { // Haptic Touch 模式：直接發送 Up 訊號
+        self.isDeepPressed = NO;
+        self.was3DTriggeredInCurrentTouch = NO;
+    } else { // Haptic Touch 模式
+        self.alpha = gSettings.idleOpacity;
         sendHomeButtonHIDEvent(NO);
     }
 }
@@ -223,17 +247,17 @@ static void loadPreferences() {
     [super touchesCancelled:touches withEvent:event];
     if (self.isHiddenTemporarily) return;
 
-    self.alpha = gSettings.idleOpacity;
-
     if (gSettings.touchMode == 0) {
-        if (self.was3DTriggeredInCurrentTouch) {
-            sendHomeButtonHIDEvent(NO);
+        if (self.isDeepPressed) {
+            [self process3DTouchRelease];
         }
+        self.alpha = gSettings.idleOpacity;
+        self.isDeepPressed = NO;
+        self.was3DTriggeredInCurrentTouch = NO;
     } else {
+        self.alpha = gSettings.idleOpacity;
         sendHomeButtonHIDEvent(NO);
     }
-
-    self.was3DTriggeredInCurrentTouch = NO;
 }
 
 @end
