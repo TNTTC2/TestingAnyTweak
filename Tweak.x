@@ -1,13 +1,18 @@
 #import <UIKit/UIKit.h>
 #import <CoreFoundation/CoreFoundation.h>
-#import <dlfcn.h>
+#import <AudioToolbox/AudioToolbox.h>
 
-#define kPreferenceDomain CFSTR("com.tnhdev.fun.screenmysaver")
+#define kPreferenceDomain CFSTR("com.tnhdev.fun.presshb")
 
-// Private Interfaces
-@interface LSApplicationWorkspace : NSObject
-+ (id)defaultWorkspace;
-- (BOOL)openApplicationWithBundleID:(NSString *)bundleID;
+// 私有宣告 (SpringBoard 系統介面)
+@interface SpringBoard : UIApplication
+- (void)_accessibilityHomeButtonClicked;
+- (void)_accessibilitySiriRequested;
+@end
+
+@interface SBMainWorkspace : NSObject
++ (id)sharedInstance;
+- (BOOL)isSwitcherWindowVisible;
 @end
 
 @interface SBLockScreenManager : NSObject
@@ -15,204 +20,426 @@
 - (BOOL)isUILocked;
 @end
 
-@interface SpringBoard : UIApplication
-- (NSString *)_accessibilityFrontMostApplicationDisplayIdentifier;
-@end
+// 定義設定參數結構
+typedef struct {
+    BOOL enabled;
+    NSInteger touchMode; // 0 = 3D Touch, 1 = Haptic Touch
+    CGFloat idleOpacity; // 0.4 ~ 0.8
+    NSInteger position;  // 0 = Bottom, 1 = Bottom Left, 2 = Bottom Right, 3 = Top, 4 = Top Left, 5 = Top Right
+    BOOL allowSiri;
+    BOOL allowLandscape;
+    BOOL allowKeyboard;
+    BOOL allowLockScreen;
+} PressHBSettings;
 
-// State Variables
-static dispatch_source_t stage1Timer = nil;
-static dispatch_source_t stage2Timer = nil;
-static BOOL isInStage2 = NO;
+static PressHBSettings gSettings;
 
-// 安全讀取 Preference 數值（自動將 NSString 轉換為整數，並進行 >= 30 限制）
-static void loadPrefs(BOOL *enabled, BOOL *allowLowPower, NSInteger *cooldown, NSInteger *wait, NSString **targetBundleID) {
+static void loadPreferences() {
     CFPreferencesAppSynchronize(kPreferenceDomain);
 
     Boolean keyExists = false;
-    if (enabled) {
-        *enabled = CFPreferencesGetAppBooleanValue(CFSTR("enabled"), kPreferenceDomain, &keyExists);
+    gSettings.enabled = CFPreferencesGetAppBooleanValue(CFSTR("enabled"), kPreferenceDomain, &keyExists);
+
+    CFNumberRef modeVal = (CFNumberRef)CFPreferencesCopyAppValue(CFSTR("touchMode"), kPreferenceDomain);
+    if (modeVal) {
+        NSInteger m = 1;
+        CFNumberGetValue(modeVal, kCFNumberNSIntegerType, &m);
+        gSettings.touchMode = m;
+        CFRelease(modeVal);
+    } else {
+        gSettings.touchMode = 1;
     }
-    if (allowLowPower) {
-        *allowLowPower = CFPreferencesGetAppBooleanValue(CFSTR("allowLowPowerMode"), kPreferenceDomain, &keyExists);
+
+    CFNumberRef opacityVal = (CFNumberRef)CFPreferencesCopyAppValue(CFSTR("idleOpacity"), kPreferenceDomain);
+    if (opacityVal) {
+        float o = 0.4f;
+        CFNumberGetValue(opacityVal, kCFNumberFloatType, &o);
+        gSettings.idleOpacity = o;
+        CFRelease(opacityVal);
+    } else {
+        gSettings.idleOpacity = 0.4f;
     }
-    if (cooldown) {
-        CFStringRef val = (CFStringRef)CFPreferencesCopyAppValue(CFSTR("cooldownTime"), kPreferenceDomain);
-        if (val) {
-            NSInteger c = [(__bridge_transfer NSString *)val integerValue];
-            *cooldown = c >= 30 ? c : 30;
-        } else {
-            *cooldown = 300;
-        }
+
+    CFNumberRef posVal = (CFNumberRef)CFPreferencesCopyAppValue(CFSTR("position"), kPreferenceDomain);
+    if (posVal) {
+        NSInteger p = 0;
+        CFNumberGetValue(posVal, kCFNumberNSIntegerType, &p);
+        gSettings.position = p;
+        CFRelease(posVal);
+    } else {
+        gSettings.position = 0;
     }
-    if (wait) {
-        CFStringRef val = (CFStringRef)CFPreferencesCopyAppValue(CFSTR("waitTime"), kPreferenceDomain);
-        if (val) {
-            NSInteger w = [(__bridge_transfer NSString *)val integerValue];
-            *wait = w >= 30 ? w : 30;
-        } else {
-            *wait = 30;
-        }
-    }
-    if (targetBundleID) {
-        CFStringRef val = (CFStringRef)CFPreferencesCopyAppValue(CFSTR("targetBundleID"), kPreferenceDomain);
-        *targetBundleID = (__bridge_transfer NSString *)val ?: @"";
-    }
+
+    gSettings.allowSiri = keyExists ? CFPreferencesGetAppBooleanValue(CFSTR("allowSiri"), kPreferenceDomain, NULL) : YES;
+    gSettings.allowLandscape = keyExists ? CFPreferencesGetAppBooleanValue(CFSTR("allowLandscape"), kPreferenceDomain, NULL) : YES;
+    gSettings.allowKeyboard = CFPreferencesGetAppBooleanValue(CFSTR("allowKeyboard"), kPreferenceDomain, NULL);
+    gSettings.allowLockScreen = CFPreferencesGetAppBooleanValue(CFSTR("allowLockScreen"), kPreferenceDomain, NULL);
 }
 
-// 動態檢測 MediaRemote 是否有媒體正在播放
-static BOOL isMediaPlaying() {
-    BOOL (*MRMediaRemoteGetNowPlayingApplicationIsPlaying)(dispatch_queue_t queue, void (^completion)(BOOL isPlaying)) = NULL;
-    void *handle = dlopen("/System/Library/PrivateFrameworks/MediaRemote.framework/MediaRemote", RTLD_LAZY);
-    if (handle) {
-        MRMediaRemoteGetNowPlayingApplicationIsPlaying = dlsym(handle, "MRMediaRemoteGetNowPlayingApplicationIsPlaying");
-    }
+// 觸控按鈕自訂類別
+@interface PressHBButton : UIView
+@property (nonatomic, assign) BOOL isHiddenTemporarily;
+@property (nonatomic, strong) NSTimer *hideTimer;
 
-    __block BOOL playing = NO;
-    if (MRMediaRemoteGetNowPlayingApplicationIsPlaying) {
-        dispatch_semaphore_t sema = dispatch_semaphore_create(0);
-        MRMediaRemoteGetNowPlayingApplicationIsPlaying(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^(BOOL isPlaying) {
-            playing = isPlaying;
-            dispatch_semaphore_signal(sema);
-        });
-        dispatch_semaphore_wait(sema, dispatch_time(DISPATCH_TIME_NOW, 100 * NSEC_PER_MSEC));
+// 3D Touch 狀態
+@property (nonatomic, assign) BOOL is3DDeepPressed;
+@property (nonatomic, assign) NSInteger deepPressCount;
+@property (nonatomic, strong) NSTimer *deepPressTimer;
+@property (nonatomic, strong) NSTimer *resetDeepPressTimer;
+
+// Haptic Touch 狀態
+@property (nonatomic, assign) BOOL isHapticEngaged;
+@property (nonatomic, assign) BOOL hasTriggeredVoice;
+@property (nonatomic, assign) BOOL waitingForSecondTap;
+@property (nonatomic, strong) NSTimer *hapticPressTimer;
+@property (nonatomic, strong) NSTimer *hapticVoiceTimer;
+@property (nonatomic, strong) NSTimer *hapticSwitchTimer;
+@property (nonatomic, assign) NSTimeInterval touchBeganTime;
+@end
+
+@implementation PressHBButton
+
+- (instancetype)initWithFrame:(CGRect)frame {
+    if (self = [super initWithFrame:frame]) {
+        self.backgroundColor = [UIColor colorWithWhite:1.0 alpha:0.15];
+        self.layer.borderColor = [UIColor colorWithWhite:1.0 alpha:0.8].CGColor;
+        self.layer.borderWidth = 2.5;
+        self.layer.cornerRadius = frame.size.width / 2.0;
+        self.clipsToBounds = YES;
+        self.alpha = gSettings.idleOpacity;
     }
-    return playing;
+    return self;
 }
 
-static void cancelStage2AndReset() {
-    if (stage2Timer) {
-        dispatch_source_cancel(stage2Timer);
-        stage2Timer = nil;
-    }
-    isInStage2 = NO;
+- (void)triggerFeedback {
+    UIImpactFeedbackGenerator *generator = [[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleMedium];
+    [generator prepare];
+    [generator impactOccurred];
 }
 
-// 開啟目標 App
-static void launchTargetApp(NSString *bundleID) {
-    if (!bundleID || [bundleID length] == 0) return;
-    LSApplicationWorkspace *workspace = [NSClassFromString(@"LSApplicationWorkspace") defaultWorkspace];
-    if ([workspace respondsToSelector:@selector(openApplicationWithBundleID:)]) {
-        [workspace openApplicationWithBundleID:bundleID];
-    }
-}
-
-// 檢查系統當前是否處於可觸發屏保的閒置狀態
-static BOOL isSystemIdle(NSString *targetBundleID, BOOL allowLowPower) {
-    // 1. 低電量模式檢查
-    if (!allowLowPower && [[NSProcessInfo processInfo] isLowPowerModeEnabled]) {
-        return NO;
-    }
-
-    // 2. 鎖定畫面檢查
-    SBLockScreenManager *lockManager = [NSClassFromString(@"SBLockScreenManager") sharedInstance];
-    if ([lockManager isUILocked]) {
-        return NO;
-    }
-
-    // 3. 影音播放檢查
-    if (isMediaPlaying()) {
-        return NO;
-    }
-
-    // 4. 前台 App 檢查（若當前前台已經是目標 App 則跳過）
+- (void)triggerHome {
     SpringBoard *sb = (SpringBoard *)[UIApplication sharedApplication];
-    if ([sb respondsToSelector:@selector(_accessibilityFrontMostApplicationDisplayIdentifier)]) {
-        NSString *currentApp = [sb _accessibilityFrontMostApplicationDisplayIdentifier];
-        if ([currentApp isEqualToString:targetBundleID]) {
-            return NO;
+    if ([sb respondsToSelector:@selector(_accessibilityHomeButtonClicked)]) {
+        [sb _accessibilityHomeButtonClicked];
+    }
+}
+
+- (void)triggerSwitcher {
+    SpringBoard *sb = (SpringBoard *)[UIApplication sharedApplication];
+    if ([sb respondsToSelector:@selector(_accessibilityHomeButtonClicked)]) {
+        [sb _accessibilityHomeButtonClicked];
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.05 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+            [sb _accessibilityHomeButtonClicked];
+        });
+    }
+}
+
+- (void)triggerSiri {
+    if (!gSettings.allowSiri) return;
+    SpringBoard *sb = (SpringBoard *)[UIApplication sharedApplication];
+    if ([sb respondsToSelector:@selector(_accessibilitySiriRequested)]) {
+        [sb _accessibilitySiriRequested];
+    }
+}
+
+- (void)fadeAndHideFor5Seconds {
+    self.isHiddenTemporarily = YES;
+    [UIView animateWithDuration:0.1 animations:^{
+        self.alpha = 0.0;
+    } completion:^(BOOL finished) {
+        [self.hideTimer invalidate];
+        self.hideTimer = [NSTimer scheduledTimerWithTimeInterval:5.0 repeats:NO block:^(NSTimer * _Nonnull timer) {
+            [UIView animateWithDuration:0.2 animations:^{
+                self.alpha = gSettings.idleOpacity;
+            } completion:^(BOOL finished) {
+                self.isHiddenTemporarily = NO;
+            }];
+        }];
+    }];
+}
+
+// 觸控開始
+- (void)touchesBegan:(NSSet<UITouch *> *)touches withEvent:(UIEvent *)event {
+    [super touchesBegan:touches withEvent:event];
+    if (self.isHiddenTemporarily) return;
+
+    UITouch *touch = [touches anyObject];
+    self.touchBeganTime = [NSDate timeIntervalSinceReferenceDate];
+
+    if (gSettings.touchMode == 0) { // 3D Touch 模式
+        [self handle3DTouch:touch];
+    } else { // Haptic Touch 模式
+        [self handleHapticBegan];
+    }
+}
+
+- (void)touchesMoved:(NSSet<UITouch *> *)touches withEvent:(UIEvent *)event {
+    [super touchesMoved:touches withEvent:event];
+    if (gSettings.touchMode == 0 && !self.isHiddenTemporarily) {
+        UITouch *touch = [touches anyObject];
+        [self handle3DTouch:touch];
+    }
+}
+
+- (void)touchesEnded:(NSSet<UITouch *> *)touches withEvent:(UIEvent *)event {
+    [super touchesEnded:touches withEvent:event];
+    if (self.isHiddenTemporarily) return;
+
+    NSTimeInterval duration = [NSDate timeIntervalSinceReferenceDate] - self.touchBeganTime;
+
+    if (gSettings.touchMode == 0) { // 3D Touch
+        if (self.is3DDeepPressed) {
+            [self handle3DTouchLifted];
+        } else if (duration < 0.3) {
+            // 純輕碰 -> 0.1秒淡出隱藏 5 秒
+            [self fadeAndHideFor5Seconds];
+        }
+    } else { // Haptic Touch
+        [self handleHapticEndedWithDuration:duration];
+    }
+}
+
+- (void)touchesCancelled:(NSSet<UITouch *> *)touches withEvent:(UIEvent *)event {
+    [super touchesCancelled:touches withEvent:event];
+    self.alpha = gSettings.idleOpacity;
+    self.is3DDeepPressed = NO;
+    self.isHapticEngaged = NO;
+}
+
+// 3D Touch 處理邏輯
+- (void)handle3DTouch:(UITouch *)touch {
+    CGFloat force = touch.force;
+    CGFloat threshold = 1.5;
+
+    if (force >= threshold && !self.is3DDeepPressed) {
+        self.is3DDeepPressed = YES;
+        self.alpha = 0.8;
+        [self triggerFeedback];
+        self.deepPressCount++;
+
+        [self.deepPressTimer invalidate];
+        self.deepPressTimer = [NSTimer scheduledTimerWithTimeInterval:1.0 repeats:NO block:^(NSTimer * _Nonnull timer) {
+            [self triggerFeedback];
+            [self triggerSiri];
+            self.deepPressCount = 0;
+        }];
+
+    } else if (force < threshold - 0.3 && self.is3DDeepPressed) {
+        [self handle3DTouchLifted];
+    }
+}
+
+- (void)handle3DTouchLifted {
+    self.is3DDeepPressed = NO;
+    self.alpha = gSettings.idleOpacity;
+    [self triggerFeedback];
+    [self.deepPressTimer invalidate];
+
+    if (self.deepPressCount == 1) {
+        [self triggerHome];
+        [self.resetDeepPressTimer invalidate];
+        self.resetDeepPressTimer = [NSTimer scheduledTimerWithTimeInterval:0.5 repeats:NO block:^(NSTimer * _Nonnull timer) {
+            self.deepPressCount = 0;
+        }];
+    } else if (self.deepPressCount >= 2) {
+        [self triggerSwitcher];
+        self.deepPressCount = 0;
+        [self.resetDeepPressTimer invalidate];
+    }
+}
+
+// Haptic Touch 處理邏輯
+- (void)handleHapticBegan {
+    if (self.waitingForSecondTap) {
+        self.alpha = 0.8;
+        [self triggerFeedback];
+    } else {
+        self.isHapticEngaged = NO;
+        self.hasTriggeredVoice = NO;
+
+        [self.hapticPressTimer invalidate];
+        self.hapticPressTimer = [NSTimer scheduledTimerWithTimeInterval:0.5 repeats:NO block:^(NSTimer * _Nonnull timer) {
+            self.isHapticEngaged = YES;
+            self.alpha = 0.8;
+            [self triggerFeedback];
+        }];
+
+        [self.hapticVoiceTimer invalidate];
+        self.hapticVoiceTimer = [NSTimer scheduledTimerWithTimeInterval:2.0 repeats:NO block:^(NSTimer * _Nonnull timer) {
+            if (self.isHapticEngaged) {
+                self.hasTriggeredVoice = YES;
+                [self triggerFeedback];
+                [self triggerSiri];
+            }
+        }];
+    }
+}
+
+- (void)handleHapticEndedWithDuration:(NSTimeInterval)duration {
+    [self.hapticPressTimer invalidate];
+    [self.hapticVoiceTimer invalidate];
+
+    if (self.waitingForSecondTap) {
+        [self triggerFeedback];
+        [self triggerSwitcher];
+        self.waitingForSecondTap = NO;
+        [self.hapticSwitchTimer invalidate];
+        self.alpha = gSettings.idleOpacity;
+    } else {
+        if (self.hasTriggeredVoice) {
+            self.hasTriggeredVoice = NO;
+            self.alpha = gSettings.idleOpacity;
+        } else if (self.isHapticEngaged) {
+            [self triggerFeedback];
+            [self triggerHome];
+            self.alpha = 0.8;
+
+            self.waitingForSecondTap = YES;
+            [self.hapticSwitchTimer invalidate];
+            self.hapticSwitchTimer = [NSTimer scheduledTimerWithTimeInterval:0.5 repeats:NO block:^(NSTimer * _Nonnull timer) {
+                self.waitingForSecondTap = NO;
+                self.alpha = gSettings.idleOpacity;
+            }];
+        } else if (duration < 0.5) {
+            // 少於 0.5 秒純輕碰 -> 淡出隱藏 5 秒
+            [self fadeAndHideFor5Seconds];
         }
     }
-
-    return YES;
+    self.isHapticEngaged = NO;
 }
 
-// 第二階段：等待倒數計時
-static void startStage2Countdown(NSInteger waitTimeSeconds, NSString *targetBundleID) {
-    cancelStage2AndReset();
-    isInStage2 = YES;
+@end
 
-    dispatch_queue_t queue = dispatch_get_main_queue();
-    stage2Timer = dispatch_source_create(DISPATCH_SOURCE_TYPE_TIMER, 0, 0, queue);
+// 頂層懸浮 Window 管理
+static UIWindow *gHBWindow = nil;
+static PressHBButton *gHBButton = nil;
 
-    dispatch_source_set_timer(stage2Timer, dispatch_time(DISPATCH_TIME_NOW, (int64_t)(waitTimeSeconds * NSEC_PER_SEC)), DISPATCH_TIME_FOREVER, 1 * NSEC_PER_SEC);
-    dispatch_source_set_event_handler(stage2Timer, ^{
-        isInStage2 = NO;
-        stage2Timer = nil;
+static void updateWindowPosition() {
+    if (!gHBWindow || !gHBButton) return;
 
-        BOOL enabled = NO;
-        BOOL allowLowPower = NO;
-        NSString *bundleID = @"";
-        loadPrefs(&enabled, &allowLowPower, NULL, NULL, &bundleID);
+    // 取得 Portrait 基準解析度（以電源接口方向為 Bottom，不受橫向影響）
+    CGRect screenBounds = [UIScreen mainScreen].bounds;
+    CGFloat width = MIN(screenBounds.size.width, screenBounds.size.height);
+    CGFloat height = MAX(screenBounds.size.width, screenBounds.size.height);
 
-        // 倒數結束，二次確認無誤後直接拉起 App
-        if (enabled && isSystemIdle(bundleID, allowLowPower)) {
-            launchTargetApp(bundleID);
-        }
-    });
-    dispatch_resume(stage2Timer);
-}
+    CGFloat btnSize = 64.0; // 經典蘋果 Home 鍵比例尺寸
+    CGFloat marginX = 25.0;
+    CGFloat marginY = 40.0;
 
-// 第一階段：冷卻檢查週期
-static void startStage1Timer() {
-    if (stage1Timer) {
-        dispatch_source_cancel(stage1Timer);
-        stage1Timer = nil;
+    CGFloat x = (width - btnSize) / 2.0;
+    CGFloat y = height - btnSize - marginY;
+
+    switch (gSettings.position) {
+        case 0: // Bottom
+            x = (width - btnSize) / 2.0;
+            y = height - btnSize - marginY;
+            break;
+        case 1: // Bottom Left
+            x = marginX;
+            y = height - btnSize - marginY;
+            break;
+        case 2: // Bottom Right
+            x = width - btnSize - marginX;
+            y = height - btnSize - marginY;
+            break;
+        case 3: // Top
+            x = (width - btnSize) / 2.0;
+            y = marginY + 20.0;
+            break;
+        case 4: // Top Left
+            x = marginX;
+            y = marginY + 20.0;
+            break;
+        case 5: // Top Right
+            x = width - btnSize - marginX;
+            y = marginY + 20.0;
+            break;
     }
-    cancelStage2AndReset();
 
-    BOOL enabled = NO;
-    BOOL allowLowPower = NO;
-    NSInteger cooldown = 300;
-    NSInteger wait = 30;
-    NSString *bundleID = @"";
-    loadPrefs(&enabled, &allowLowPower, &cooldown, &wait, &bundleID);
-
-    if (!enabled || [bundleID length] == 0) return;
-
-    dispatch_queue_t queue = dispatch_get_main_queue();
-    stage1Timer = dispatch_source_create(DISPATCH_SOURCE_TYPE_TIMER, 0, 0, queue);
-
-    dispatch_source_set_timer(stage1Timer, dispatch_time(DISPATCH_TIME_NOW, (int64_t)(cooldown * NSEC_PER_SEC)), (uint64_t)cooldown * NSEC_PER_SEC, 1 * NSEC_PER_SEC);
-    dispatch_source_set_event_handler(stage1Timer, ^{
-        if (isInStage2) return;
-
-        if (isSystemIdle(bundleID, allowLowPower)) {
-            startStage2Countdown(wait, bundleID);
-        }
-    });
-    dispatch_resume(stage1Timer);
+    gHBWindow.frame = CGRectMake(x, y, btnSize, btnSize);
+    gHBButton.frame = CGRectMake(0, 0, btnSize, btnSize);
+    gHBButton.layer.cornerRadius = btnSize / 2.0;
 }
 
-// Hook SpringBoard 全域觸控事件：若在第二階段收到任何觸控，立即中斷倒數
+static void reloadTweakState() {
+    loadPreferences();
+
+    if (!gSettings.enabled) {
+        if (gHBWindow) {
+            gHBWindow.hidden = YES;
+        }
+        return;
+    }
+
+    if (!gHBWindow) {
+        gHBWindow = [[UIWindow alloc] initWithFrame:CGRectZero];
+        gHBWindow.windowLevel = UIWindowLevelStatusBar + 100;
+        gHBWindow.backgroundColor = [UIColor clearColor];
+
+        UIViewController *vc = [[UIViewController alloc] init];
+        vc.view.backgroundColor = [UIColor clearColor];
+        gHBWindow.rootViewController = vc;
+
+        gHBButton = [[PressHBButton alloc] initWithFrame:CGRectZero];
+        [vc.view addSubview:gHBButton];
+    }
+
+    updateWindowPosition();
+    gHBButton.alpha = gSettings.idleOpacity;
+    gHBWindow.hidden = NO;
+}
+
+// Hook SpringBoard 以監聽鍵盤、鎖定畫面與橫向狀態過濾
 %hook SpringBoard
 
-- (void)sendEvent:(UIEvent *)event {
+- (void)applicationDidFinishLaunching:(id)application {
     %orig;
-    if (event.type == UIEventTypeTouches) {
-        NSSet *touches = [event allTouches];
-        for (UITouch *touch in touches) {
-            if (touch.phase == UITouchPhaseBegan || touch.phase == UITouchPhaseMoved) {
-                if (isInStage2) {
-                    cancelStage2AndReset();
-                }
-                break;
-            }
+    reloadTweakState();
+
+    // 監聽鍵盤彈出
+    [[NSNotificationCenter defaultCenter] addObserverForName:UIKeyboardWillShowNotification object:nil queue:[NSOperationQueue mainQueue] usingBlock:^(NSNotification * _Nonnull note) {
+        if (!gSettings.allowKeyboard && gHBWindow) {
+            gHBWindow.hidden = YES;
         }
+    }];
+
+    [[NSNotificationCenter defaultCenter] addObserverForName:UIKeyboardWillHideNotification object:nil queue:[NSOperationQueue mainQueue] usingBlock:^(NSNotification * _Nonnull note) {
+        if (gSettings.enabled && gHBWindow) {
+            gHBWindow.hidden = NO;
+        }
+    }];
+}
+
+%end
+
+// 監聽轉向與鎖定畫面狀態
+%hook SBLockScreenManager
+
+- (void)lockUIFromSource:(int)arg1 withOptions:(id)arg2 {
+    %orig;
+    if (!gSettings.allowLockScreen && gHBWindow) {
+        gHBWindow.hidden = YES;
+    }
+}
+
+- (void)unlockUIFromSource:(int)arg1 {
+    %orig;
+    if (gSettings.enabled && gHBWindow) {
+        gHBWindow.hidden = NO;
     }
 }
 
 %end
 
-// 插件載入與 Preference 變更動態刷新
 %ctor {
     @autoreleasepool {
-        startStage1Timer();
+        reloadTweakState();
 
         CFNotificationCenterAddObserver(
             CFNotificationCenterGetDarwinNotifyCenter(),
             NULL,
-            (CFNotificationCallback)startStage1Timer,
-            CFSTR("com.tnhdev.fun.screenmysaver/ReloadPrefs"),
+            (CFNotificationCallback)reloadTweakState,
+            CFSTR("com.tnhdev.fun.presshb/ReloadPrefs"),
             NULL,
             CFNotificationSuspensionBehaviorDeliverImmediately
         );
