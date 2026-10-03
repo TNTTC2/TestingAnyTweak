@@ -1,13 +1,19 @@
 #import <UIKit/UIKit.h>
 #import <CoreFoundation/CoreFoundation.h>
 #import <AudioToolbox/AudioToolbox.h>
+#import <mach/mach_time.h>
+#import <dlfcn.h>
 
 #define kPreferenceDomain CFSTR("com.tnhdev.fun.presshb")
 
+// IOHIDEvent 底層宣告
+typedef struct __IOHIDEvent *IOHIDEventRef;
+typedef IOHIDEventRef (*IOHIDEventCreateKeyboardEventFunc)(CFAllocatorRef allocator, uint64_t timeStamp, uint16_t usagePage, uint16_t usage, Boolean down, uint32_t flags);
+
 // 私有宣告 (SpringBoard 系統介面)
 @interface SpringBoard : UIApplication
-- (void)_accessibilityHomeButtonClicked;
 - (void)_accessibilitySiriRequested;
+- (void)_handleHIDEvent:(IOHIDEventRef)event;
 @end
 
 typedef struct {
@@ -23,6 +29,33 @@ typedef struct {
 
 static PressHBSettings gSettings;
 static BOOL gIsAppLaunched = NO;
+
+// 向系統發送實時的 Home 鍵 Down/Up HID 訊號
+static void sendHomeButtonHIDEvent(BOOL isDown) {
+    dispatch_async(dispatch_get_main_queue(), ^{
+        uint64_t time = mach_absolute_time();
+        static IOHIDEventCreateKeyboardEventFunc createKeyboardEvent = NULL;
+        static dispatch_once_t onceToken;
+        dispatch_once(&onceToken, ^{
+            createKeyboardEvent = (IOHIDEventCreateKeyboardEventFunc)dlsym(RTLD_DEFAULT, "IOHIDEventCreateKeyboardEvent");
+        });
+
+        if (createKeyboardEvent) {
+            // Consumer Page = 0x0C, Menu / Home Button = 0x40
+            IOHIDEventRef event = createKeyboardEvent(kCFAllocatorDefault, time, 0x0C, 0x40, isDown, 0);
+            if (event) {
+                SpringBoard *sb = (SpringBoard *)[UIApplication sharedApplication];
+                if ([sb respondsToSelector:@selector(_handleHIDEvent:)]) {
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Warc-performSelector-leaks"
+                    [sb performSelector:@selector(_handleHIDEvent:) withObject:(__bridge id)event];
+#pragma clang diagnostic pop
+                }
+                CFRelease(event);
+            }
+        }
+    });
+}
 
 static void loadPreferences() {
     CFPreferencesAppSynchronize(kPreferenceDomain);
@@ -66,7 +99,7 @@ static void loadPreferences() {
     gSettings.allowLockScreen = CFPreferencesGetAppBooleanValue(CFSTR("allowLockScreen"), kPreferenceDomain, NULL);
 }
 
-// 自訂 Window，避免搶奪焦點
+// 自訂 Window，避開焦點搶奪
 @interface PressHBWindow : UIWindow
 @end
 
@@ -76,7 +109,7 @@ static void loadPreferences() {
 }
 @end
 
-// 自訂 RootViewController，鎖定直立旋轉（以充電孔為底部基準）
+// 自訂 RootViewController，鎖定直立旋轉（以充電孔為底部）
 @interface PressHBRootViewController : UIViewController
 @end
 
@@ -89,16 +122,14 @@ static void loadPreferences() {
 }
 @end
 
-// 觸控按鈕自訂類別
+// 懸浮 Home 按鈕類別
 @interface PressHBButton : UIView
 @property (nonatomic, assign) BOOL isHiddenTemporarily;
 @property (nonatomic, strong) NSTimer *hideTimer;
 
 // 3D Touch 狀態
 @property (nonatomic, assign) BOOL is3DDeepPressed;
-@property (nonatomic, assign) NSInteger deepPressCount;
 @property (nonatomic, strong) NSTimer *deepPressTimer;
-@property (nonatomic, strong) NSTimer *resetDeepPressTimer;
 
 // Haptic Touch 狀態
 @property (nonatomic, assign) BOOL isHapticEngaged;
@@ -130,30 +161,6 @@ static void loadPreferences() {
     [generator impactOccurred];
 }
 
-// 觸發一次主畫面按鈕
-- (void)triggerHome {
-    dispatch_async(dispatch_get_main_queue(), ^{
-        SpringBoard *sb = (SpringBoard *)[UIApplication sharedApplication];
-        if ([sb respondsToSelector:@selector(_accessibilityHomeButtonClicked)]) {
-            [sb _accessibilityHomeButtonClicked];
-        }
-    });
-}
-
-// 觸發兩次主畫面按鈕 (喚起 App 切換器)
-- (void)triggerSwitcher {
-    dispatch_async(dispatch_get_main_queue(), ^{
-        SpringBoard *sb = (SpringBoard *)[UIApplication sharedApplication];
-        if ([sb respondsToSelector:@selector(_accessibilityHomeButtonClicked)]) {
-            [sb _accessibilityHomeButtonClicked];
-            dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.08 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
-                [sb _accessibilityHomeButtonClicked];
-            });
-        }
-    });
-}
-
-// 觸發 Siri
 - (void)triggerSiri {
     if (!gSettings.allowSiri) return;
     dispatch_async(dispatch_get_main_queue(), ^{
@@ -181,7 +188,7 @@ static void loadPreferences() {
     }];
 }
 
-// 觸控事件分發
+// 觸控事件開始
 - (void)touchesBegan:(NSSet<UITouch *> *)touches withEvent:(UIEvent *)event {
     [super touchesBegan:touches withEvent:event];
     if (self.isHiddenTemporarily) return;
@@ -223,12 +230,16 @@ static void loadPreferences() {
 
 - (void)touchesCancelled:(NSSet<UITouch *> *)touches withEvent:(UIEvent *)event {
     [super touchesCancelled:touches withEvent:event];
+    if (self.is3DDeepPressed || self.isHapticEngaged || self.waitingForSecondTap) {
+        sendHomeButtonHIDEvent(NO); // 確保觸控取消時釋放 Home 鍵
+    }
     self.alpha = gSettings.idleOpacity;
     self.is3DDeepPressed = NO;
     self.isHapticEngaged = NO;
+    self.waitingForSecondTap = NO;
 }
 
-// 3D Touch 邏輯
+// 3D Touch 邏輯 (向系統傳送實時 Home DOWN / UP)
 - (void)handle3DTouch:(UITouch *)touch {
     CGFloat force = touch.force;
     CGFloat threshold = 1.5;
@@ -237,13 +248,16 @@ static void loadPreferences() {
         self.is3DDeepPressed = YES;
         self.alpha = 0.8;
         [self triggerFeedback];
-        self.deepPressCount++;
+        sendHomeButtonHIDEvent(YES); // 即時向系統發送 Home DOWN
 
         [self.deepPressTimer invalidate];
         self.deepPressTimer = [NSTimer scheduledTimerWithTimeInterval:1.0 repeats:NO block:^(NSTimer * _Nonnull timer) {
-            [self triggerFeedback];
-            [self triggerSiri];
-            self.deepPressCount = 0;
+            if (gSettings.allowSiri) {
+                self.hasTriggeredVoice = YES;
+                [self triggerFeedback];
+                sendHomeButtonHIDEvent(NO); // 結束 Home 按壓
+                [self triggerSiri];
+            }
         }];
 
     } else if (force < threshold - 0.3 && self.is3DDeepPressed) {
@@ -254,43 +268,44 @@ static void loadPreferences() {
 - (void)handle3DTouchLifted {
     self.is3DDeepPressed = NO;
     self.alpha = gSettings.idleOpacity;
-    [self triggerFeedback];
     [self.deepPressTimer invalidate];
 
-    if (self.deepPressCount == 1) {
-        [self triggerHome];
-        [self.resetDeepPressTimer invalidate];
-        self.resetDeepPressTimer = [NSTimer scheduledTimerWithTimeInterval:0.5 repeats:NO block:^(NSTimer * _Nonnull timer) {
-            self.deepPressCount = 0;
-        }];
-    } else if (self.deepPressCount >= 2) {
-        [self triggerSwitcher];
-        self.deepPressCount = 0;
-        [self.resetDeepPressTimer invalidate];
+    if (self.hasTriggeredVoice) {
+        self.hasTriggeredVoice = NO;
+    } else {
+        [self triggerFeedback];
+        sendHomeButtonHIDEvent(NO); // 即時向系統發送 Home UP
     }
 }
 
 // Haptic Touch 邏輯
 - (void)handleHapticBegan {
     if (self.waitingForSecondTap) {
+        // 0.5 秒內的連續快速點按，即時傳送 Home DOWN
+        [self.hapticSwitchTimer invalidate];
         self.alpha = 0.8;
         [self triggerFeedback];
+        sendHomeButtonHIDEvent(YES);
     } else {
         self.isHapticEngaged = NO;
         self.hasTriggeredVoice = NO;
 
+        // 1. 檢測按住達 0.5 秒發送 Home DOWN
         [self.hapticPressTimer invalidate];
         self.hapticPressTimer = [NSTimer scheduledTimerWithTimeInterval:0.5 repeats:NO block:^(NSTimer * _Nonnull timer) {
             self.isHapticEngaged = YES;
             self.alpha = 0.8;
             [self triggerFeedback];
+            sendHomeButtonHIDEvent(YES); // 0.5 秒到了，發送 Home DOWN
         }];
 
+        // 2. 檢測按住達 2.0 秒觸發 Siri
         [self.hapticVoiceTimer invalidate];
         self.hapticVoiceTimer = [NSTimer scheduledTimerWithTimeInterval:2.0 repeats:NO block:^(NSTimer * _Nonnull timer) {
-            if (self.isHapticEngaged) {
+            if (self.isHapticEngaged && gSettings.allowSiri) {
                 self.hasTriggeredVoice = YES;
                 [self triggerFeedback];
+                sendHomeButtonHIDEvent(NO); // 放開 Home 按壓
                 [self triggerSiri];
             }
         }];
@@ -301,31 +316,39 @@ static void loadPreferences() {
     [self.hapticPressTimer invalidate];
     [self.hapticVoiceTimer invalidate];
 
-    if (self.waitingForSecondTap) {
-        [self triggerFeedback];
-        [self triggerSwitcher];
-        self.waitingForSecondTap = NO;
-        [self.hapticSwitchTimer invalidate];
+    if (self.hasTriggeredVoice) {
+        self.hasTriggeredVoice = NO;
         self.alpha = gSettings.idleOpacity;
-    } else {
-        if (self.hasTriggeredVoice) {
-            self.hasTriggeredVoice = NO;
-            self.alpha = gSettings.idleOpacity;
-        } else if (self.isHapticEngaged) {
-            [self triggerFeedback];
-            [self triggerHome];
-            self.alpha = 0.8;
+    } else if (self.isHapticEngaged) {
+        // 首次按住超過 0.5 秒放手 -> 發送 Home UP
+        [self triggerFeedback];
+        sendHomeButtonHIDEvent(NO);
+        self.alpha = 0.8;
 
-            self.waitingForSecondTap = YES;
-            [self.hapticSwitchTimer invalidate];
-            self.hapticSwitchTimer = [NSTimer scheduledTimerWithTimeInterval:0.5 repeats:NO block:^(NSTimer * _Nonnull timer) {
-                self.waitingForSecondTap = NO;
-                self.alpha = gSettings.idleOpacity;
-            }];
-        } else if (duration < 0.5) {
-            [self fadeAndHideFor5Seconds];
-        }
+        // 開啟 0.5 秒隨後快速點按等待視窗
+        self.waitingForSecondTap = YES;
+        [self.hapticSwitchTimer invalidate];
+        self.hapticSwitchTimer = [NSTimer scheduledTimerWithTimeInterval:0.5 repeats:NO block:^(NSTimer * _Nonnull timer) {
+            self.waitingForSecondTap = NO;
+            self.alpha = gSettings.idleOpacity;
+        }];
+    } else if (self.waitingForSecondTap) {
+        // 快速點按放手 -> 發送 Home UP
+        [self triggerFeedback];
+        sendHomeButtonHIDEvent(NO);
+        self.alpha = 0.8;
+
+        // 重新刷新 0.5 秒視窗，等待可能發生的第三次點按
+        [self.hapticSwitchTimer invalidate];
+        self.hapticSwitchTimer = [NSTimer scheduledTimerWithTimeInterval:0.5 repeats:NO block:^(NSTimer * _Nonnull timer) {
+            self.waitingForSecondTap = NO;
+            self.alpha = gSettings.idleOpacity;
+        }];
+    } else if (duration < 0.5) {
+        // 少於 0.5 秒輕觸 -> 淡出隱藏 5 秒
+        [self fadeAndHideFor5Seconds];
     }
+
     self.isHapticEngaged = NO;
 }
 
