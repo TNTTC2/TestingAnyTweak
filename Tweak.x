@@ -10,22 +10,16 @@
 - (void)_accessibilitySiriRequested;
 @end
 
-@interface SBMainWorkspace : NSObject
-+ (id)sharedInstance;
-- (BOOL)isSwitcherWindowVisible;
-@end
-
 @interface SBLockScreenManager : NSObject
 + (id)sharedInstance;
 - (BOOL)isUILocked;
 @end
 
-// 定義設定參數結構
 typedef struct {
     BOOL enabled;
     NSInteger touchMode; // 0 = 3D Touch, 1 = Haptic Touch
     CGFloat idleOpacity; // 0.4 ~ 0.8
-    NSInteger position;  // 0 = Bottom, 1 = Bottom Left, 2 = Bottom Right, 3 = Top, 4 = Top Left, 5 = Top Right
+    NSInteger position;  // 0=Bottom, 1=Bottom Left, 2=Bottom Right, 3=Top, 4=Top Left, 5=Top Right
     BOOL allowSiri;
     BOOL allowLandscape;
     BOOL allowKeyboard;
@@ -33,6 +27,7 @@ typedef struct {
 } PressHBSettings;
 
 static PressHBSettings gSettings;
+static BOOL gIsAppLaunched = NO;
 
 static void loadPreferences() {
     CFPreferencesAppSynchronize(kPreferenceDomain);
@@ -76,6 +71,29 @@ static void loadPreferences() {
     gSettings.allowLockScreen = CFPreferencesGetAppBooleanValue(CFSTR("allowLockScreen"), kPreferenceDomain, NULL);
 }
 
+// 自訂 Window，避免搶奪 KeyWindow
+@interface PressHBWindow : UIWindow
+@end
+
+@implementation PressHBWindow
+- (BOOL)_canBecomeKeyWindow {
+    return NO;
+}
+@end
+
+// 自訂 RootViewController，鎖定直立旋轉（以充電孔為底部）
+@interface PressHBRootViewController : UIViewController
+@end
+
+@implementation PressHBRootViewController
+- (BOOL)shouldAutorotate {
+    return NO;
+}
+- (UIInterfaceOrientationMask)supportedInterfaceOrientations {
+    return UIInterfaceOrientationMaskPortrait;
+}
+@end
+
 // 觸控按鈕自訂類別
 @interface PressHBButton : UIView
 @property (nonatomic, assign) BOOL isHiddenTemporarily;
@@ -118,28 +136,34 @@ static void loadPreferences() {
 }
 
 - (void)triggerHome {
-    SpringBoard *sb = (SpringBoard *)[UIApplication sharedApplication];
-    if ([sb respondsToSelector:@selector(_accessibilityHomeButtonClicked)]) {
-        [sb _accessibilityHomeButtonClicked];
-    }
+    dispatch_async(dispatch_get_main_queue(), ^{
+        SpringBoard *sb = (SpringBoard *)[UIApplication sharedApplication];
+        if ([sb respondsToSelector:@selector(_accessibilityHomeButtonClicked)]) {
+            [sb _accessibilityHomeButtonClicked];
+        }
+    });
 }
 
 - (void)triggerSwitcher {
-    SpringBoard *sb = (SpringBoard *)[UIApplication sharedApplication];
-    if ([sb respondsToSelector:@selector(_accessibilityHomeButtonClicked)]) {
-        [sb _accessibilityHomeButtonClicked];
-        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.05 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+    dispatch_async(dispatch_get_main_queue(), ^{
+        SpringBoard *sb = (SpringBoard *)[UIApplication sharedApplication];
+        if ([sb respondsToSelector:@selector(_accessibilityHomeButtonClicked)]) {
             [sb _accessibilityHomeButtonClicked];
-        });
-    }
+            dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.08 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+                [sb _accessibilityHomeButtonClicked];
+            });
+        }
+    });
 }
 
 - (void)triggerSiri {
     if (!gSettings.allowSiri) return;
-    SpringBoard *sb = (SpringBoard *)[UIApplication sharedApplication];
-    if ([sb respondsToSelector:@selector(_accessibilitySiriRequested)]) {
-        [sb _accessibilitySiriRequested];
-    }
+    dispatch_async(dispatch_get_main_queue(), ^{
+        SpringBoard *sb = (SpringBoard *)[UIApplication sharedApplication];
+        if ([sb respondsToSelector:@selector(_accessibilitySiriRequested)]) {
+            [sb _accessibilitySiriRequested];
+        }
+    });
 }
 
 - (void)fadeAndHideFor5Seconds {
@@ -158,7 +182,7 @@ static void loadPreferences() {
     }];
 }
 
-// 觸控開始
+// 觸控分發
 - (void)touchesBegan:(NSSet<UITouch *> *)touches withEvent:(UIEvent *)event {
     [super touchesBegan:touches withEvent:event];
     if (self.isHiddenTemporarily) return;
@@ -166,9 +190,9 @@ static void loadPreferences() {
     UITouch *touch = [touches anyObject];
     self.touchBeganTime = [NSDate timeIntervalSinceReferenceDate];
 
-    if (gSettings.touchMode == 0) { // 3D Touch 模式
+    if (gSettings.touchMode == 0) { // 3D Touch
         [self handle3DTouch:touch];
-    } else { // Haptic Touch 模式
+    } else { // Haptic Touch
         [self handleHapticBegan];
     }
 }
@@ -191,7 +215,6 @@ static void loadPreferences() {
         if (self.is3DDeepPressed) {
             [self handle3DTouchLifted];
         } else if (duration < 0.3) {
-            // 純輕碰 -> 0.1秒淡出隱藏 5 秒
             [self fadeAndHideFor5Seconds];
         }
     } else { // Haptic Touch
@@ -301,7 +324,7 @@ static void loadPreferences() {
                 self.alpha = gSettings.idleOpacity;
             }];
         } else if (duration < 0.5) {
-            // 少於 0.5 秒純輕碰 -> 淡出隱藏 5 秒
+            // 少於 0.5 秒輕碰 -> 淡出隱藏 5 秒
             [self fadeAndHideFor5Seconds];
         }
     }
@@ -310,19 +333,17 @@ static void loadPreferences() {
 
 @end
 
-// 頂層懸浮 Window 管理
-static UIWindow *gHBWindow = nil;
+static PressHBWindow *gHBWindow = nil;
 static PressHBButton *gHBButton = nil;
 
 static void updateWindowPosition() {
     if (!gHBWindow || !gHBButton) return;
 
-    // 取得 Portrait 基準解析度（以電源接口方向為 Bottom，不受橫向影響）
     CGRect screenBounds = [UIScreen mainScreen].bounds;
     CGFloat width = MIN(screenBounds.size.width, screenBounds.size.height);
     CGFloat height = MAX(screenBounds.size.width, screenBounds.size.height);
 
-    CGFloat btnSize = 64.0; // 經典蘋果 Home 鍵比例尺寸
+    CGFloat btnSize = 64.0;
     CGFloat marginX = 25.0;
     CGFloat marginY = 40.0;
 
@@ -364,77 +385,112 @@ static void updateWindowPosition() {
 static void reloadTweakState() {
     loadPreferences();
 
-    if (!gSettings.enabled) {
-        if (gHBWindow) {
-            gHBWindow.hidden = YES;
+    if (!gIsAppLaunched) return;
+
+    dispatch_async(dispatch_get_main_queue(), ^{
+        if (!gSettings.enabled) {
+            if (gHBWindow) {
+                gHBWindow.hidden = YES;
+            }
+            return;
         }
-        return;
-    }
 
-    if (!gHBWindow) {
-        gHBWindow = [[UIWindow alloc] initWithFrame:CGRectZero];
-        gHBWindow.windowLevel = UIWindowLevelStatusBar + 100;
-        gHBWindow.backgroundColor = [UIColor clearColor];
+        if (!gHBWindow) {
+            UIWindowScene *activeScene = nil;
+            for (UIScene *scene in [UIApplication sharedApplication].connectedScenes) {
+                if ([scene isKindOfClass:[UIWindowScene class]]) {
+                    activeScene = (UIWindowScene *)scene;
+                    break;
+                }
+            }
 
-        UIViewController *vc = [[UIViewController alloc] init];
-        vc.view.backgroundColor = [UIColor clearColor];
-        gHBWindow.rootViewController = vc;
+            if (activeScene) {
+                gHBWindow = [[PressHBWindow alloc] initWithWindowScene:activeScene];
+            } else {
+                gHBWindow = [[PressHBWindow alloc] initWithFrame:CGRectZero];
+            }
 
-        gHBButton = [[PressHBButton alloc] initWithFrame:CGRectZero];
-        [vc.view addSubview:gHBButton];
-    }
+            gHBWindow.windowLevel = UIWindowLevelStatusBar + 100;
+            gHBWindow.backgroundColor = [UIColor clearColor];
 
-    updateWindowPosition();
-    gHBButton.alpha = gSettings.idleOpacity;
-    gHBWindow.hidden = NO;
+            PressHBRootViewController *vc = [[PressHBRootViewController alloc] init];
+            vc.view.backgroundColor = [UIColor clearColor];
+            gHBWindow.rootViewController = vc;
+
+            gHBButton = [[PressHBButton alloc] initWithFrame:CGRectZero];
+            [vc.view addSubview:gHBButton];
+        }
+
+        updateWindowPosition();
+        gHBButton.alpha = gSettings.idleOpacity;
+        gHBWindow.hidden = NO;
+    });
 }
 
-// Hook SpringBoard 以監聽鍵盤、鎖定畫面與橫向狀態過濾
-%hook SpringBoard
+static void setupNotificationObservers() {
+    NSNotificationCenter *nc = [NSNotificationCenter defaultCenter];
 
-- (void)applicationDidFinishLaunching:(id)application {
-    %orig;
-    reloadTweakState();
-
-    // 監聽鍵盤彈出
-    [[NSNotificationCenter defaultCenter] addObserverForName:UIKeyboardWillShowNotification object:nil queue:[NSOperationQueue mainQueue] usingBlock:^(NSNotification * _Nonnull note) {
+    // 鍵盤狀態過濾
+    [nc addObserverForName:UIKeyboardWillShowNotification object:nil queue:[NSOperationQueue mainQueue] usingBlock:^(NSNotification * _Nonnull note) {
         if (!gSettings.allowKeyboard && gHBWindow) {
             gHBWindow.hidden = YES;
         }
     }];
 
-    [[NSNotificationCenter defaultCenter] addObserverForName:UIKeyboardWillHideNotification object:nil queue:[NSOperationQueue mainQueue] usingBlock:^(NSNotification * _Nonnull note) {
+    [nc addObserverForName:UIKeyboardWillHideNotification object:nil queue:[NSOperationQueue mainQueue] usingBlock:^(NSNotification * _Nonnull note) {
         if (gSettings.enabled && gHBWindow) {
             gHBWindow.hidden = NO;
         }
     }];
+
+    // 橫向狀態過濾
+    [nc addObserverForName:UIApplicationDidChangeStatusBarOrientationNotification object:nil queue:[NSOperationQueue mainQueue] usingBlock:^(NSNotification * _Nonnull note) {
+        UIInterfaceOrientation orientation = [UIApplication sharedApplication].statusBarOrientation;
+        BOOL isLandscape = UIInterfaceOrientationIsLandscape(orientation);
+        if (isLandscape && !gSettings.allowLandscape) {
+            if (gHBWindow) gHBWindow.hidden = YES;
+        } else {
+            if (gSettings.enabled && gHBWindow) gHBWindow.hidden = NO;
+        }
+    }];
 }
 
-%end
-
-// 監聽轉向與鎖定畫面狀態
 %hook SBLockScreenManager
-
 - (void)lockUIFromSource:(int)arg1 withOptions:(id)arg2 {
     %orig;
     if (!gSettings.allowLockScreen && gHBWindow) {
-        gHBWindow.hidden = YES;
+        dispatch_async(dispatch_get_main_queue(), ^{
+            gHBWindow.hidden = YES;
+        });
     }
 }
 
 - (void)unlockUIFromSource:(int)arg1 {
     %orig;
     if (gSettings.enabled && gHBWindow) {
-        gHBWindow.hidden = NO;
+        dispatch_async(dispatch_get_main_queue(), ^{
+            gHBWindow.hidden = NO;
+        });
     }
 }
-
 %end
 
 %ctor {
     @autoreleasepool {
-        reloadTweakState();
+        // 1. 純 C/CFPreferences 設定載入，不觸碰 UI
+        loadPreferences();
 
+        // 2. 監聽 SpringBoard 完全啟動通知後才建立 UI
+        [[NSNotificationCenter defaultCenter] addObserverForName:UIApplicationDidFinishLaunchingNotification
+                                                          object:nil
+                                                           queue:[NSOperationQueue mainQueue]
+                                                      usingBlock:^(NSNotification * _Nonnull note) {
+            gIsAppLaunched = YES;
+            setupNotificationObservers();
+            reloadTweakState();
+        }];
+
+        // 3. 監聽 Preference 修改通知
         CFNotificationCenterAddObserver(
             CFNotificationCenterGetDarwinNotifyCenter(),
             NULL,
