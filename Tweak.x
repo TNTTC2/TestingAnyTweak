@@ -10,11 +10,6 @@
 - (void)_accessibilitySiriRequested;
 @end
 
-@interface SBLockScreenManager : NSObject
-+ (id)sharedInstance;
-- (BOOL)isUILocked;
-@end
-
 typedef struct {
     BOOL enabled;
     NSInteger touchMode; // 0 = 3D Touch, 1 = Haptic Touch
@@ -71,7 +66,7 @@ static void loadPreferences() {
     gSettings.allowLockScreen = CFPreferencesGetAppBooleanValue(CFSTR("allowLockScreen"), kPreferenceDomain, NULL);
 }
 
-// 自訂 Window，避免搶奪 KeyWindow
+// 自訂 Window，避免搶奪焦點
 @interface PressHBWindow : UIWindow
 @end
 
@@ -81,7 +76,7 @@ static void loadPreferences() {
 }
 @end
 
-// 自訂 RootViewController，鎖定直立旋轉（以充電孔為底部）
+// 自訂 RootViewController，鎖定直立旋轉（以充電孔為底部基準）
 @interface PressHBRootViewController : UIViewController
 @end
 
@@ -135,6 +130,7 @@ static void loadPreferences() {
     [generator impactOccurred];
 }
 
+// 觸發一次主畫面按鈕
 - (void)triggerHome {
     dispatch_async(dispatch_get_main_queue(), ^{
         SpringBoard *sb = (SpringBoard *)[UIApplication sharedApplication];
@@ -144,6 +140,7 @@ static void loadPreferences() {
     });
 }
 
+// 觸發兩次主畫面按鈕 (喚起 App 切換器)
 - (void)triggerSwitcher {
     dispatch_async(dispatch_get_main_queue(), ^{
         SpringBoard *sb = (SpringBoard *)[UIApplication sharedApplication];
@@ -156,6 +153,7 @@ static void loadPreferences() {
     });
 }
 
+// 觸發 Siri
 - (void)triggerSiri {
     if (!gSettings.allowSiri) return;
     dispatch_async(dispatch_get_main_queue(), ^{
@@ -166,6 +164,7 @@ static void loadPreferences() {
     });
 }
 
+// 0.1 秒淡出隱藏 5 秒
 - (void)fadeAndHideFor5Seconds {
     self.isHiddenTemporarily = YES;
     [UIView animateWithDuration:0.1 animations:^{
@@ -182,7 +181,7 @@ static void loadPreferences() {
     }];
 }
 
-// 觸控分發
+// 觸控事件分發
 - (void)touchesBegan:(NSSet<UITouch *> *)touches withEvent:(UIEvent *)event {
     [super touchesBegan:touches withEvent:event];
     if (self.isHiddenTemporarily) return;
@@ -190,9 +189,9 @@ static void loadPreferences() {
     UITouch *touch = [touches anyObject];
     self.touchBeganTime = [NSDate timeIntervalSinceReferenceDate];
 
-    if (gSettings.touchMode == 0) { // 3D Touch
+    if (gSettings.touchMode == 0) { // 3D Touch 模式
         [self handle3DTouch:touch];
-    } else { // Haptic Touch
+    } else { // Haptic Touch 模式
         [self handleHapticBegan];
     }
 }
@@ -229,7 +228,7 @@ static void loadPreferences() {
     self.isHapticEngaged = NO;
 }
 
-// 3D Touch 處理邏輯
+// 3D Touch 邏輯
 - (void)handle3DTouch:(UITouch *)touch {
     CGFloat force = touch.force;
     CGFloat threshold = 1.5;
@@ -271,7 +270,7 @@ static void loadPreferences() {
     }
 }
 
-// Haptic Touch 處理邏輯
+// Haptic Touch 邏輯
 - (void)handleHapticBegan {
     if (self.waitingForSecondTap) {
         self.alpha = 0.8;
@@ -324,7 +323,6 @@ static void loadPreferences() {
                 self.alpha = gSettings.idleOpacity;
             }];
         } else if (duration < 0.5) {
-            // 少於 0.5 秒輕碰 -> 淡出隱藏 5 秒
             [self fadeAndHideFor5Seconds];
         }
     }
@@ -443,7 +441,7 @@ static void setupNotificationObservers() {
         }
     }];
 
-    // 橫向狀態過濾 (使用 pragma 忽略廢棄通知警告)
+    // 橫向狀態過濾
 #pragma clang diagnostic push
 #pragma clang diagnostic ignored "-Wdeprecated-declarations"
     [nc addObserverForName:UIApplicationDidChangeStatusBarOrientationNotification object:nil queue:[NSOperationQueue mainQueue] usingBlock:^(NSNotification * _Nonnull note) {
@@ -480,10 +478,8 @@ static void setupNotificationObservers() {
 
 %ctor {
     @autoreleasepool {
-        // 1. 純 C/CFPreferences 設定載入，不觸碰 UI
         loadPreferences();
 
-        // 2. 監聽 SpringBoard 完全啟動通知後才建立 UI
         [[NSNotificationCenter defaultCenter] addObserverForName:UIApplicationDidFinishLaunchingNotification
                                                           object:nil
                                                            queue:[NSOperationQueue mainQueue]
@@ -493,7 +489,6 @@ static void setupNotificationObservers() {
             reloadTweakState();
         }];
 
-        // 3. 監聽 Preference 修改通知
         CFNotificationCenterAddObserver(
             CFNotificationCenterGetDarwinNotifyCenter(),
             NULL,
