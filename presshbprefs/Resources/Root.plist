@@ -1,0 +1,189 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>items</key>
+	<array>
+		<dict>
+			<key>cell</key>
+			<string>PSGroupCell</string>
+			<key>label</key>
+			<string>Enable</string>
+		</dict>
+		<dict>
+			<key>cell</key>
+			<string>PSSwitchCell</string>
+			<key>default</key>
+			<false/>
+			<key>defaults</key>
+			<string>com.tnhdev.fun.presshb</string>
+			<key>key</key>
+			<string>enabled</string>
+			<key>label</key>
+			<string>Enabled</string>
+			<key>PostNotification</key>
+			<string>com.tnhdev.fun.presshb/ReloadPrefs</string>
+		</dict>
+
+		<dict>
+			<key>cell</key>
+			<string>PSGroupCell</string>
+			<key>label</key>
+			<string>Touch Mode</string>
+		</dict>
+		<dict>
+			<key>cell</key>
+			<string>PSSegmentCell</string>
+			<key>default</key>
+			<integer>1</integer>
+			<key>defaults</key>
+			<string>com.tnhdev.fun.presshb</string>
+			<key>key</key>
+			<string>touchMode</string>
+			<key>validTitles</key>
+			<array>
+				<string>3D Touch</string>
+				<string>Haptic Touch</string>
+			</array>
+			<key>validValues</key>
+			<array>
+				<integer>0</integer>
+				<integer>1</integer>
+			</array>
+			<key>PostNotification</key>
+			<string>com.tnhdev.fun.presshb/ReloadPrefs</string>
+		</dict>
+
+		<dict>
+			<key>cell</key>
+			<string>PSGroupCell</string>
+			<key>label</key>
+			<string>Idle Opacity (40% - 80%)</string>
+		</dict>
+		<dict>
+			<key>cell</key>
+			<string>PSSliderCell</string>
+			<key>default</key>
+			<real>0.4</real>
+			<key>defaults</key>
+			<string>com.tnhdev.fun.presshb</string>
+			<key>key</key>
+			<string>idleOpacity</string>
+			<key>min</key>
+			<real>0.4</real>
+			<key>max</key>
+			<real>0.8</real>
+			<key>showValue</key>
+			<true/>
+			<key>PostNotification</key>
+			<string>com.tnhdev.fun.presshb/ReloadPrefs</string>
+		</dict>
+
+		<dict>
+			<key>cell</key>
+			<string>PSGroupCell</string>
+			<key>label</key>
+			<string>Position (Relative to charging port)</string>
+		</dict>
+		<dict>
+			<key>cell</key>
+			<string>PSLinkListCell</string>
+			<key>default</key>
+			<integer>0</integer>
+			<key>defaults</key>
+			<string>com.tnhdev.fun.presshb</string>
+			<key>key</key>
+			<string>position</string>
+			<key>label</key>
+			<string>Position</string>
+			<key>detail</key>
+			<string>PSListItemsController</string>
+			<key>validTitles</key>
+			<array>
+				<string>Bottom</string>
+				<string>Bottom Left</string>
+				<string>Bottom Right</string>
+				<string>Top</string>
+				<string>Top Left</string>
+				<string>Top Right</string>
+			</array>
+			<key>validValues</key>
+			<array>
+				<integer>0</integer>
+				<integer>1</integer>
+				<integer>2</integer>
+				<integer>3</integer>
+				<integer>4</integer>
+				<integer>5</integer>
+			</array>
+			<key>PostNotification</key>
+			<string>com.tnhdev.fun.presshb/ReloadPrefs</string>
+		</dict>
+
+		<dict>
+			<key>cell</key>
+			<string>PSGroupCell</string>
+			<key>label</key>
+			<string>Options</string>
+		</dict>
+		<dict>
+			<key>cell</key>
+			<string>PSSwitchCell</string>
+			<key>default</key>
+			<true/>
+			<key>defaults</key>
+			<string>com.tnhdev.fun.presshb</string>
+			<key>key</key>
+			<string>allowSiri</string>
+			<key>label</key>
+			<string>Summon Siri</string>
+			<key>PostNotification</key>
+			<string>com.tnhdev.fun.presshb/ReloadPrefs</string>
+		</dict>
+		<dict>
+			<key>cell</key>
+			<string>PSSwitchCell</string>
+			<key>default</key>
+			<true/>
+			<key>defaults</key>
+			<string>com.tnhdev.fun.presshb</string>
+			<key>key</key>
+			<string>allowLandscape</string>
+			<key>label</key>
+			<string>Allow in landscape</string>
+			<key>PostNotification</key>
+			<string>com.tnhdev.fun.presshb/ReloadPrefs</string>
+		</dict>
+		<dict>
+			<key>cell</key>
+			<string>PSSwitchCell</string>
+			<key>default</key>
+			<false/>
+			<key>defaults</key>
+			<string>com.tnhdev.fun.presshb</string>
+			<key>key</key>
+			<string>allowKeyboard</string>
+			<key>label</key>
+			<string>Allow when keyboard show up</string>
+			<key>PostNotification</key>
+			<string>com.tnhdev.fun.presshb/ReloadPrefs</string>
+		</dict>
+		<dict>
+			<key>cell</key>
+			<string>PSSwitchCell</string>
+			<key>default</key>
+			<false/>
+			<key>defaults</key>
+			<string>com.tnhdev.fun.presshb</string>
+			<key>key</key>
+			<string>allowLockScreen</string>
+			<key>label</key>
+			<string>Allow in lock screen</string>
+			<key>PostNotification</key>
+			<string>com.tnhdev.fun.presshb/ReloadPrefs</string>
+		</dict>
+	</array>
+	<key>title</key>
+	<string>PressHB</string>
+</dict>
+</plist>
