@@ -37,5 +37,5 @@ jobs:
     - name: Upload .deb Artifact
       uses: actions/upload-artifact@v4
       with:
-        name: ScreenMySaver-Deb
+        name: PressHB-Deb
         path: packages/*.deb
