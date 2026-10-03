@@ -134,20 +134,6 @@
 			<key>defaults</key>
 			<string>com.tnhdev.fun.presshb</string>
 			<key>key</key>
-			<string>allowSiri</string>
-			<key>label</key>
-			<string>Summon Siri</string>
-			<key>PostNotification</key>
-			<string>com.tnhdev.fun.presshb/ReloadPrefs</string>
-		</dict>
-		<dict>
-			<key>cell</key>
-			<string>PSSwitchCell</string>
-			<key>default</key>
-			<true/>
-			<key>defaults</key>
-			<string>com.tnhdev.fun.presshb</string>
-			<key>key</key>
 			<string>allowLandscape</string>
 			<key>label</key>
 			<string>Allow in landscape</string>
