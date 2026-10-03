@@ -443,7 +443,9 @@ static void setupNotificationObservers() {
         }
     }];
 
-    // 橫向狀態過濾
+    // 橫向狀態過濾 (使用 pragma 忽略廢棄通知警告)
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wdeprecated-declarations"
     [nc addObserverForName:UIApplicationDidChangeStatusBarOrientationNotification object:nil queue:[NSOperationQueue mainQueue] usingBlock:^(NSNotification * _Nonnull note) {
         UIInterfaceOrientation orientation = [UIApplication sharedApplication].statusBarOrientation;
         BOOL isLandscape = UIInterfaceOrientationIsLandscape(orientation);
@@ -453,6 +455,7 @@ static void setupNotificationObservers() {
             if (gSettings.enabled && gHBWindow) gHBWindow.hidden = NO;
         }
     }];
+#pragma clang diagnostic pop
 }
 
 %hook SBLockScreenManager
