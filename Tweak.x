@@ -6,11 +6,24 @@
 
 #define kPreferenceDomain CFSTR("com.tnhdev.fun.presshb")
 
-// IOHIDEvent 底層宣告
+// --- IOHIDEvent 底層定義 ---
 typedef struct __IOHIDEvent *IOHIDEventRef;
+typedef uint32_t IOHIDEventType;
+
+#define kIOHIDEventTypeDigitizer 11
+
+typedef enum {
+    kIOHIDEventFieldDigitizerX = (11 << 16) | 0,
+    kIOHIDEventFieldDigitizerY = (11 << 16) | 1,
+    kIOHIDEventFieldDigitizerPressure = (11 << 16) | 3,
+    kIOHIDEventFieldDigitizerIsTouching = (11 << 16) | 5
+} IOHIDEventFieldDigitizer;
+
+extern IOHIDEventType IOHIDEventGetType(IOHIDEventRef event);
+extern float IOHIDEventGetFloatValue(IOHIDEventRef event, uint32_t field);
+extern integer_t IOHIDEventGetIntValue(IOHIDEventRef event, uint32_t field);
 typedef IOHIDEventRef (*IOHIDEventCreateKeyboardEventFunc)(CFAllocatorRef allocator, uint64_t timeStamp, uint16_t usagePage, uint16_t usage, Boolean down, uint32_t flags);
 
-// 私有宣告 (SpringBoard 系統介面)
 @interface SpringBoard : UIApplication
 - (void)_handleHIDEvent:(IOHIDEventRef)event;
 @end
@@ -18,8 +31,8 @@ typedef IOHIDEventRef (*IOHIDEventCreateKeyboardEventFunc)(CFAllocatorRef alloca
 typedef struct {
     BOOL enabled;
     NSInteger touchMode; // 0 = 3D Touch, 1 = Haptic Touch
-    CGFloat idleOpacity; // 0.4 ~ 0.8
-    NSInteger position;  // 0=Bottom, 1=Bottom Left, 2=Bottom Right, 3=Top, 4=Top Left, 5=Top Right
+    CGFloat idleOpacity;
+    NSInteger position;
     BOOL allowLandscape;
     BOOL allowKeyboard;
     BOOL allowLockScreen;
@@ -28,7 +41,7 @@ typedef struct {
 static PressHBSettings gSettings;
 static BOOL gIsAppLaunched = NO;
 
-// 向系統發送 Home 鍵 Down/Up HID 訊號
+// 發送 Home 鍵 Down/Up HID 訊號
 static void sendHomeButtonHIDEvent(BOOL isDown) {
     dispatch_async(dispatch_get_main_queue(), ^{
         uint64_t time = mach_absolute_time();
@@ -39,7 +52,6 @@ static void sendHomeButtonHIDEvent(BOOL isDown) {
         });
 
         if (createKeyboardEvent) {
-            // Consumer Page = 0x0C, Menu / Home Button = 0x40
             IOHIDEventRef event = createKeyboardEvent(kCFAllocatorDefault, time, 0x0C, 0x40, isDown, 0);
             if (event) {
                 SpringBoard *sb = (SpringBoard *)[UIApplication sharedApplication];
@@ -57,7 +69,6 @@ static void sendHomeButtonHIDEvent(BOOL isDown) {
 
 static void loadPreferences() {
     CFPreferencesAppSynchronize(kPreferenceDomain);
-
     Boolean keyExists = false;
     gSettings.enabled = CFPreferencesGetAppBooleanValue(CFSTR("enabled"), kPreferenceDomain, &keyExists);
 
@@ -96,41 +107,25 @@ static void loadPreferences() {
     gSettings.allowLockScreen = CFPreferencesGetAppBooleanValue(CFSTR("allowLockScreen"), kPreferenceDomain, NULL);
 }
 
-// 自訂 Window，不搶奪焦點
 @interface PressHBWindow : UIWindow
 @end
-
 @implementation PressHBWindow
-- (BOOL)_canBecomeKeyWindow {
-    return NO;
-}
+- (BOOL)_canBecomeKeyWindow { return NO; }
 @end
 
-// 自訂 RootViewController，鎖定直立旋轉（以充電孔為底部）
 @interface PressHBRootViewController : UIViewController
 @end
-
 @implementation PressHBRootViewController
-- (BOOL)shouldAutorotate {
-    return NO;
-}
-- (UIInterfaceOrientationMask)supportedInterfaceOrientations {
-    return UIInterfaceOrientationMaskPortrait;
-}
+- (BOOL)shouldAutorotate { return NO; }
+- (UIInterfaceOrientationMask)supportedInterfaceOrientations { return UIInterfaceOrientationMaskPortrait; }
 @end
 
-// 懸浮 Home 按鈕類別
 @interface PressHBButton : UIView
 @property (nonatomic, assign) BOOL isHiddenTemporarily;
 @property (nonatomic, strong) NSTimer *hideTimer;
-
-// 3D Touch 狀態標記
-@property (nonatomic, assign) BOOL isDeepPressed;
-@property (nonatomic, assign) BOOL was3DTriggeredInCurrentTouch;
 @end
 
 @implementation PressHBButton
-
 - (instancetype)initWithFrame:(CGRect)frame {
     if (self = [super initWithFrame:frame]) {
         self.backgroundColor = [UIColor colorWithWhite:1.0 alpha:0.15];
@@ -149,7 +144,6 @@ static void loadPreferences() {
     [generator impactOccurred];
 }
 
-// 淡出隱藏 5 秒（輕點專用）
 - (void)fadeAndHideFor5Seconds {
     self.isHiddenTemporarily = YES;
     [UIView animateWithDuration:0.1 animations:^{
@@ -165,105 +159,96 @@ static void loadPreferences() {
         }];
     }];
 }
-
-// 觸控開始
-- (void)touchesBegan:(NSSet<UITouch *> *)touches withEvent:(UIEvent *)event {
-    [super touchesBegan:touches withEvent:event];
-    if (self.isHiddenTemporarily) return;
-
-    if (gSettings.touchMode == 0) { // 3D Touch 模式
-        self.isDeepPressed = NO;
-        self.was3DTriggeredInCurrentTouch = NO;
-        // 注意：輕觸時不改變不透明度，保持 idleOpacity，只有真正達到力度門檻才變高亮
-        UITouch *touch = [touches anyObject];
-        [self handle3DTouchForce:touch];
-    } else { // Haptic Touch 模式
-        self.alpha = 0.8;
-        [self triggerFeedback];
-        sendHomeButtonHIDEvent(YES);
-    }
-}
-
-- (void)touchesMoved:(NSSet<UITouch *> *)touches withEvent:(UIEvent *)event {
-    [super touchesMoved:touches withEvent:event];
-    if (self.isHiddenTemporarily) return;
-
-    if (gSettings.touchMode == 0) {
-        UITouch *touch = [touches anyObject];
-        [self handle3DTouchForce:touch];
-    }
-}
-
-// 處理 3D Touch 力度變化
-- (void)handle3DTouchForce:(UITouch *)touch {
-    CGFloat force = touch.force;
-    CGFloat threshold = 1.5;
-
-    if (force >= threshold && !self.isDeepPressed) {
-        // 壓下去！
-        self.isDeepPressed = YES;
-        self.was3DTriggeredInCurrentTouch = YES;
-        self.alpha = 0.8; // 成功重壓才變亮
-        [self triggerFeedback];
-        sendHomeButtonHIDEvent(YES); // 發送 Home DOWN
-    } else if (force < threshold - 0.3 && self.isDeepPressed) {
-        // 鬆手/減壓放開！
-        [self process3DTouchRelease];
-    }
-}
-
-// 3D Touch 鬆手/放開重壓邏輯
-- (void)process3DTouchRelease {
-    self.isDeepPressed = NO;
-    self.alpha = gSettings.idleOpacity;
-    [self triggerFeedback];
-    sendHomeButtonHIDEvent(NO); // 發送 Home UP
-}
-
-- (void)touchesEnded:(NSSet<UITouch *> *)touches withEvent:(UIEvent *)event {
-    [super touchesEnded:touches withEvent:event];
-    if (self.isHiddenTemporarily) return;
-
-    if (gSettings.touchMode == 0) { // 3D Touch 模式
-        if (self.isDeepPressed) {
-            // 手指離開螢幕時仍在重壓狀態：執行放開 Home 鍵
-            [self process3DTouchRelease];
-        } else if (!self.was3DTriggeredInCurrentTouch) {
-            // 未曾達到重壓門檻的快速輕點放手：隱藏 5 秒
-            [self fadeAndHideFor5Seconds];
-        } else {
-            // 曾重壓但放手過程中力度已先降回門檻以下（前面已執行過 release）
-            self.alpha = gSettings.idleOpacity;
-        }
-        self.isDeepPressed = NO;
-        self.was3DTriggeredInCurrentTouch = NO;
-    } else { // Haptic Touch 模式
-        self.alpha = gSettings.idleOpacity;
-        sendHomeButtonHIDEvent(NO);
-    }
-}
-
-- (void)touchesCancelled:(NSSet<UITouch *> *)touches withEvent:(UIEvent *)event {
-    [super touchesCancelled:touches withEvent:event];
-    if (self.isHiddenTemporarily) return;
-
-    if (gSettings.touchMode == 0) {
-        if (self.isDeepPressed) {
-            [self process3DTouchRelease];
-        }
-        self.alpha = gSettings.idleOpacity;
-        self.isDeepPressed = NO;
-        self.was3DTriggeredInCurrentTouch = NO;
-    } else {
-        self.alpha = gSettings.idleOpacity;
-        sendHomeButtonHIDEvent(NO);
-    }
-}
-
 @end
 
 static PressHBWindow *gHBWindow = nil;
 static PressHBButton *gHBButton = nil;
+
+// --- 全域 3D Touch 狀態 (不受 App 切換影響) ---
+static BOOL gIsHIDDeepPressed = NO;
+static BOOL gWas3DTriggeredInSession = NO;
+
+// 處理底層 3D Touch 硬體壓力和位置
+static void processRawDigitizerEvent(float rawX, float rawY, float pressure, BOOL isTouching) {
+    if (!gHBWindow || gHBWindow.hidden || gHBButton.isHiddenTemporarily) return;
+
+    // 將 0.0 ~ 1.0 的相對座標轉換為螢幕像素座標
+    CGRect screenBounds = [UIScreen mainScreen].bounds;
+    CGPoint touchPoint = CGPointMake(rawX * screenBounds.size.width, rawY * screenBounds.size.height);
+
+    // 檢查觸控點是否落在懸浮按鈕範圍內
+    BOOL isInside = CGRectContainsPoint(gHBWindow.frame, touchPoint);
+
+    if (!isTouching) {
+        // 放手：手指離開螢幕
+        if (gIsHIDDeepPressed) {
+            gIsHIDDeepPressed = NO;
+            dispatch_async(dispatch_get_main_queue(), ^{
+                gHBButton.alpha = gSettings.idleOpacity;
+                [gHBButton triggerFeedback];
+            });
+            sendHomeButtonHIDEvent(NO);
+        } else if (isInside && !gWas3DTriggeredInSession) {
+            // 純輕點放手：隱藏 5 秒
+            dispatch_async(dispatch_get_main_queue(), ^{
+                [gHBButton fadeAndHideFor5Seconds];
+            });
+        }
+        gWas3DTriggeredInSession = NO;
+        return;
+    }
+
+    if (isInside) {
+        // 底層硬件 Pressure 閾值：重壓門檻約為 0.45 ~ 0.5，放鬆門檻約為 0.25
+        float pressThreshold = 0.45f;
+        float releaseThreshold = 0.25f;
+
+        if (pressure >= pressThreshold && !gIsHIDDeepPressed) {
+            // 無縫重壓 Down！
+            gIsHIDDeepPressed = YES;
+            gWas3DTriggeredInSession = YES;
+            dispatch_async(dispatch_get_main_queue(), ^{
+                gHBButton.alpha = 0.8;
+                [gHBButton triggerFeedback];
+            });
+            sendHomeButtonHIDEvent(YES);
+        } else if (pressure < releaseThreshold && gIsHIDDeepPressed) {
+            // 無縫鬆手 Up！（手指不離開螢幕，可直接再次重壓）
+            gIsHIDDeepPressed = NO;
+            dispatch_async(dispatch_get_main_queue(), ^{
+                gHBButton.alpha = gSettings.idleOpacity;
+                [gHBButton triggerFeedback];
+            });
+            sendHomeButtonHIDEvent(NO);
+        }
+    } else {
+        // 手指移出按鈕區域
+        if (gIsHIDDeepPressed) {
+            gIsHIDDeepPressed = NO;
+            dispatch_async(dispatch_get_main_queue(), ^{
+                gHBButton.alpha = gSettings.idleOpacity;
+            });
+            sendHomeButtonHIDEvent(NO);
+        }
+    }
+}
+
+%hook SpringBoard
+- (void)_handleHIDEvent:(IOHIDEventRef)event {
+    %orig;
+
+    if (gSettings.enabled && gSettings.touchMode == 0 && gHBWindow && !gHBWindow.hidden) {
+        if (IOHIDEventGetType(event) == kIOHIDEventTypeDigitizer) {
+            float x = IOHIDEventGetFloatValue(event, kIOHIDEventFieldDigitizerX);
+            float y = IOHIDEventGetFloatValue(event, kIOHIDEventFieldDigitizerY);
+            float pressure = IOHIDEventGetFloatValue(event, kIOHIDEventFieldDigitizerPressure);
+            integer_t touching = IOHIDEventGetIntValue(event, kIOHIDEventFieldDigitizerIsTouching);
+
+            processRawDigitizerEvent(x, y, pressure, (touching != 0));
+        }
+    }
+}
+%end
 
 static void updateWindowPosition() {
     if (!gHBWindow || !gHBButton) return;
@@ -280,30 +265,12 @@ static void updateWindowPosition() {
     CGFloat y = height - btnSize - marginY;
 
     switch (gSettings.position) {
-        case 0: // Bottom
-            x = (width - btnSize) / 2.0;
-            y = height - btnSize - marginY;
-            break;
-        case 1: // Bottom Left
-            x = marginX;
-            y = height - btnSize - marginY;
-            break;
-        case 2: // Bottom Right
-            x = width - btnSize - marginX;
-            y = height - btnSize - marginY;
-            break;
-        case 3: // Top
-            x = (width - btnSize) / 2.0;
-            y = marginY + 20.0;
-            break;
-        case 4: // Top Left
-            x = marginX;
-            y = marginY + 20.0;
-            break;
-        case 5: // Top Right
-            x = width - btnSize - marginX;
-            y = marginY + 20.0;
-            break;
+        case 0: x = (width - btnSize) / 2.0; y = height - btnSize - marginY; break;
+        case 1: x = marginX; y = height - btnSize - marginY; break;
+        case 2: x = width - btnSize - marginX; y = height - btnSize - marginY; break;
+        case 3: x = (width - btnSize) / 2.0; y = marginY + 20.0; break;
+        case 4: x = marginX; y = marginY + 20.0; break;
+        case 5: x = width - btnSize - marginX; y = marginY + 20.0; break;
     }
 
     gHBWindow.frame = CGRectMake(x, y, btnSize, btnSize);
@@ -313,14 +280,11 @@ static void updateWindowPosition() {
 
 static void reloadTweakState() {
     loadPreferences();
-
     if (!gIsAppLaunched) return;
 
     dispatch_async(dispatch_get_main_queue(), ^{
         if (!gSettings.enabled) {
-            if (gHBWindow) {
-                gHBWindow.hidden = YES;
-            }
+            if (gHBWindow) gHBWindow.hidden = YES;
             return;
         }
 
@@ -333,12 +297,7 @@ static void reloadTweakState() {
                 }
             }
 
-            if (activeScene) {
-                gHBWindow = [[PressHBWindow alloc] initWithWindowScene:activeScene];
-            } else {
-                gHBWindow = [[PressHBWindow alloc] initWithFrame:CGRectZero];
-            }
-
+            gHBWindow = activeScene ? [[PressHBWindow alloc] initWithWindowScene:activeScene] : [[PressHBWindow alloc] initWithFrame:CGRectZero];
             gHBWindow.windowLevel = UIWindowLevelStatusBar + 100;
             gHBWindow.backgroundColor = [UIColor clearColor];
 
@@ -356,57 +315,6 @@ static void reloadTweakState() {
     });
 }
 
-static void setupNotificationObservers() {
-    NSNotificationCenter *nc = [NSNotificationCenter defaultCenter];
-
-    // 鍵盤狀態過濾
-    [nc addObserverForName:UIKeyboardWillShowNotification object:nil queue:[NSOperationQueue mainQueue] usingBlock:^(NSNotification * _Nonnull note) {
-        if (!gSettings.allowKeyboard && gHBWindow) {
-            gHBWindow.hidden = YES;
-        }
-    }];
-
-    [nc addObserverForName:UIKeyboardWillHideNotification object:nil queue:[NSOperationQueue mainQueue] usingBlock:^(NSNotification * _Nonnull note) {
-        if (gSettings.enabled && gHBWindow) {
-            gHBWindow.hidden = NO;
-        }
-    }];
-
-    // 橫向狀態過濾
-#pragma clang diagnostic push
-#pragma clang diagnostic ignored "-Wdeprecated-declarations"
-    [nc addObserverForName:UIApplicationDidChangeStatusBarOrientationNotification object:nil queue:[NSOperationQueue mainQueue] usingBlock:^(NSNotification * _Nonnull note) {
-        UIInterfaceOrientation orientation = [UIApplication sharedApplication].statusBarOrientation;
-        BOOL isLandscape = UIInterfaceOrientationIsLandscape(orientation);
-        if (isLandscape && !gSettings.allowLandscape) {
-            if (gHBWindow) gHBWindow.hidden = YES;
-        } else {
-            if (gSettings.enabled && gHBWindow) gHBWindow.hidden = NO;
-        }
-    }];
-#pragma clang diagnostic pop
-}
-
-%hook SBLockScreenManager
-- (void)lockUIFromSource:(int)arg1 withOptions:(id)arg2 {
-    %orig;
-    if (!gSettings.allowLockScreen && gHBWindow) {
-        dispatch_async(dispatch_get_main_queue(), ^{
-            gHBWindow.hidden = YES;
-        });
-    }
-}
-
-- (void)unlockUIFromSource:(int)arg1 {
-    %orig;
-    if (gSettings.enabled && gHBWindow) {
-        dispatch_async(dispatch_get_main_queue(), ^{
-            gHBWindow.hidden = NO;
-        });
-    }
-}
-%end
-
 %ctor {
     @autoreleasepool {
         loadPreferences();
@@ -416,7 +324,6 @@ static void setupNotificationObservers() {
                                                            queue:[NSOperationQueue mainQueue]
                                                       usingBlock:^(NSNotification * _Nonnull note) {
             gIsAppLaunched = YES;
-            setupNotificationObservers();
             reloadTweakState();
         }];
 
