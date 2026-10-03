@@ -127,15 +127,10 @@ static void loadPreferences() {
 @property (nonatomic, assign) BOOL isHiddenTemporarily;
 @property (nonatomic, strong) NSTimer *hideTimer;
 
-// 3D Touch 狀態
+// 全域狀態管理
+@property (nonatomic, assign) BOOL hasTriggeredAction; // 確保單次觸控流程中只會觸發一次動作
 @property (nonatomic, assign) BOOL is3DDeepPressed;
-@property (nonatomic, assign) BOOL was3DTriggeredInCurrentTouch;
-@property (nonatomic, strong) NSTimer *deepPressTimer;
-
-// Haptic Touch 狀態
-@property (nonatomic, assign) BOOL isHapticEngaged;
-@property (nonatomic, assign) BOOL hasTriggeredVoice;
-@property (nonatomic, strong) NSTimer *hapticVoiceTimer;
+@property (nonatomic, strong) NSTimer *siriTimer;
 @property (nonatomic, assign) NSTimeInterval touchBeganTime;
 @end
 
@@ -159,7 +154,7 @@ static void loadPreferences() {
     [generator impactOccurred];
 }
 
-// 三重相容性 Siri 召喚邏輯
+// 多重相容性 Siri 召喚邏輯
 - (void)triggerSiri {
     if (!gSettings.allowSiri) return;
     dispatch_async(dispatch_get_main_queue(), ^{
@@ -235,140 +230,86 @@ static void loadPreferences() {
     [super touchesBegan:touches withEvent:event];
     if (self.isHiddenTemporarily) return;
 
-    UITouch *touch = [touches anyObject];
     self.touchBeganTime = [NSDate timeIntervalSinceReferenceDate];
-    self.was3DTriggeredInCurrentTouch = NO;
-    self.hasTriggeredVoice = NO;
+    self.hasTriggeredAction = NO;
+    self.is3DDeepPressed = NO;
+    self.alpha = 0.8; // 按下時提亮
+
+    // 啟動 1.0 秒 Siri 召喚定時器
+    [self.siriTimer invalidate];
+    self.siriTimer = [NSTimer scheduledTimerWithTimeInterval:1.0 repeats:NO block:^(NSTimer * _Nonnull timer) {
+        if (!self.hasTriggeredAction && gSettings.allowSiri) {
+            self.hasTriggeredAction = YES;
+            [self triggerFeedback];
+            [self triggerSiri];
+        }
+    }];
 
     if (gSettings.touchMode == 0) { // 3D Touch 模式
-        [self handle3DTouch:touch];
-    } else { // Haptic Touch 模式
-        [self handleHapticBegan];
+        UITouch *touch = [touches anyObject];
+        [self handle3DTouchForce:touch];
     }
 }
 
 - (void)touchesMoved:(NSSet<UITouch *> *)touches withEvent:(UIEvent *)event {
     [super touchesMoved:touches withEvent:event];
-    if (gSettings.touchMode == 0 && !self.isHiddenTemporarily) {
+    if (self.isHiddenTemporarily || self.hasTriggeredAction) return;
+
+    if (gSettings.touchMode == 0) {
         UITouch *touch = [touches anyObject];
-        [self handle3DTouch:touch];
+        [self handle3DTouchForce:touch];
     }
 }
 
-- (void)touchesEnded:(NSSet<UITouch *> *)touches withEvent:(UIEvent *)event {
-    [super touchesEnded:touches withEvent:event];
-    if (self.isHiddenTemporarily) return;
-
-    NSTimeInterval duration = [NSDate timeIntervalSinceReferenceDate] - self.touchBeganTime;
-
-    if (gSettings.touchMode == 0) { // 3D Touch 模式
-        if (self.is3DDeepPressed) {
-            [self handle3DTouchLifted];
-        } else if (!self.was3DTriggeredInCurrentTouch && duration < 0.3) {
-            // 未達 3D Touch 門檻且按住少於 0.3 秒 -> 隱藏 5 秒
-            [self fadeAndHideFor5Seconds];
-        } else if (duration >= 0.3 && duration < 1.0) {
-            // 輕觸按住 0.3~1.0 秒放手 -> 觸發按一下 Home 鍵
-            [self triggerFeedback];
-            sendHomeButtonHIDEvent(YES);
-            dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.05 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
-                sendHomeButtonHIDEvent(NO);
-            });
-        }
-    } else { // Haptic Touch 模式
-        [self handleHapticEndedWithDuration:duration];
-    }
-}
-
-- (void)touchesCancelled:(NSSet<UITouch *> *)touches withEvent:(UIEvent *)event {
-    [super touchesCancelled:touches withEvent:event];
-    [self.deepPressTimer invalidate];
-    [self.hapticVoiceTimer invalidate];
-    self.alpha = gSettings.idleOpacity;
-    self.is3DDeepPressed = NO;
-    self.isHapticEngaged = NO;
-    self.hasTriggeredVoice = NO;
-    self.was3DTriggeredInCurrentTouch = NO;
-}
-
-// 3D Touch 邏輯
-- (void)handle3DTouch:(UITouch *)touch {
+- (void)handle3DTouchForce:(UITouch *)touch {
     CGFloat force = touch.force;
     CGFloat threshold = 1.5;
 
     if (force >= threshold && !self.is3DDeepPressed) {
         self.is3DDeepPressed = YES;
-        self.was3DTriggeredInCurrentTouch = YES; // 標記本次觸控已達 3D Touch 門檻
-        self.alpha = 0.8;
         [self triggerFeedback];
-
-        // 啟動 1.0 秒定時器，專門觸發 Siri
-        [self.deepPressTimer invalidate];
-        self.deepPressTimer = [NSTimer scheduledTimerWithTimeInterval:1.0 repeats:NO block:^(NSTimer * _Nonnull timer) {
-            if (gSettings.allowSiri) {
-                self.hasTriggeredVoice = YES;
-                [self triggerFeedback];
-                [self triggerSiri];
-            }
-        }];
-
     } else if (force < threshold - 0.3 && self.is3DDeepPressed) {
-        [self handle3DTouchLifted];
+        self.is3DDeepPressed = NO;
     }
 }
 
-- (void)handle3DTouchLifted {
-    self.is3DDeepPressed = NO;
+// 觸控結束（放手時統一且精確地發送單次 Home 鍵或隱藏）
+- (void)touchesEnded:(NSSet<UITouch *> *)touches withEvent:(UIEvent *)event {
+    [super touchesEnded:touches withEvent:event];
+    if (self.isHiddenTemporarily) return;
+
+    [self.siriTimer invalidate];
     self.alpha = gSettings.idleOpacity;
-    [self.deepPressTimer invalidate];
 
-    if (self.hasTriggeredVoice) {
-        self.hasTriggeredVoice = NO;
-    } else {
-        // 重壓放手（按住未滿 1.0 秒）：發送一次完整的 Home 鍵點按
-        [self triggerFeedback];
-        sendHomeButtonHIDEvent(YES);
-        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.05 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
-            sendHomeButtonHIDEvent(NO);
-        });
+    // 若按住過程已觸發 Siri，直接返回不重複傳送 Home 鍵
+    if (self.hasTriggeredAction) {
+        return;
     }
-}
 
-// Haptic Touch 邏輯
-- (void)handleHapticBegan {
-    self.isHapticEngaged = NO;
-    self.hasTriggeredVoice = NO;
+    // 鎖定狀態，防止二次觸發
+    self.hasTriggeredAction = YES;
 
-    // 按住滿 1.0 秒觸發 Siri
-    [self.hapticVoiceTimer invalidate];
-    self.hapticVoiceTimer = [NSTimer scheduledTimerWithTimeInterval:1.0 repeats:NO block:^(NSTimer * _Nonnull timer) {
-        if (gSettings.allowSiri) {
-            self.hasTriggeredVoice = YES;
-            self.alpha = 0.8;
-            [self triggerFeedback];
-            [self triggerSiri];
-        }
-    }];
-}
+    NSTimeInterval duration = [NSDate timeIntervalSinceReferenceDate] - self.touchBeganTime;
 
-- (void)handleHapticEndedWithDuration:(NSTimeInterval)duration {
-    [self.hapticVoiceTimer invalidate];
-
-    if (self.hasTriggeredVoice) {
-        self.hasTriggeredVoice = NO;
-        self.alpha = gSettings.idleOpacity;
-    } else if (duration >= 0.3) {
-        // 按住 0.3 秒 ~ 1.0 秒放手：發送一次 Home 鍵點按
-        [self triggerFeedback];
-        sendHomeButtonHIDEvent(YES);
-        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.05 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
-            sendHomeButtonHIDEvent(NO);
-        });
-        self.alpha = gSettings.idleOpacity;
-    } else {
-        // 少於 0.3 秒輕觸：淡出隱藏 5 秒
+    if (duration < 0.3 && !self.is3DDeepPressed) {
+        // 短按（< 0.3秒且無重壓）：隱藏 5 秒
         [self fadeAndHideFor5Seconds];
+    } else {
+        // 按住未滿 1 秒（0.3s ~ 1.0s）放手，或是 3D 重壓後放手：精確觸發一次 Home 鍵返回主畫面
+        [self triggerFeedback];
+        sendHomeButtonHIDEvent(YES);
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.05 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+            sendHomeButtonHIDEvent(NO);
+        });
     }
+}
+
+- (void)touchesCancelled:(NSSet<UITouch *> *)touches withEvent:(UIEvent *)event {
+    [super touchesCancelled:touches withEvent:event];
+    [self.siriTimer invalidate];
+    self.alpha = gSettings.idleOpacity;
+    self.hasTriggeredAction = NO;
+    self.is3DDeepPressed = NO;
 }
 
 @end
