@@ -12,7 +12,6 @@ typedef IOHIDEventRef (*IOHIDEventCreateKeyboardEventFunc)(CFAllocatorRef alloca
 
 // 私有宣告 (SpringBoard 系統介面)
 @interface SpringBoard : UIApplication
-- (void)_accessibilitySiriRequested;
 - (void)_handleHIDEvent:(IOHIDEventRef)event;
 @end
 
@@ -21,7 +20,6 @@ typedef struct {
     NSInteger touchMode; // 0 = 3D Touch, 1 = Haptic Touch
     CGFloat idleOpacity; // 0.4 ~ 0.8
     NSInteger position;  // 0=Bottom, 1=Bottom Left, 2=Bottom Right, 3=Top, 4=Top Left, 5=Top Right
-    BOOL allowSiri;
     BOOL allowLandscape;
     BOOL allowKeyboard;
     BOOL allowLockScreen;
@@ -93,13 +91,12 @@ static void loadPreferences() {
         gSettings.position = 0;
     }
 
-    gSettings.allowSiri = keyExists ? CFPreferencesGetAppBooleanValue(CFSTR("allowSiri"), kPreferenceDomain, NULL) : YES;
     gSettings.allowLandscape = keyExists ? CFPreferencesGetAppBooleanValue(CFSTR("allowLandscape"), kPreferenceDomain, NULL) : YES;
     gSettings.allowKeyboard = CFPreferencesGetAppBooleanValue(CFSTR("allowKeyboard"), kPreferenceDomain, NULL);
     gSettings.allowLockScreen = CFPreferencesGetAppBooleanValue(CFSTR("allowLockScreen"), kPreferenceDomain, NULL);
 }
 
-// 自訂 Window，避開焦點搶奪
+// 自訂 Window，不搶奪焦點
 @interface PressHBWindow : UIWindow
 @end
 
@@ -126,12 +123,7 @@ static void loadPreferences() {
 @interface PressHBButton : UIView
 @property (nonatomic, assign) BOOL isHiddenTemporarily;
 @property (nonatomic, strong) NSTimer *hideTimer;
-
-// 全域狀態管理
-@property (nonatomic, assign) BOOL hasTriggeredAction; // 確保單次觸控流程中只會觸發一次動作
-@property (nonatomic, assign) BOOL is3DDeepPressed;
-@property (nonatomic, strong) NSTimer *siriTimer;
-@property (nonatomic, assign) NSTimeInterval touchBeganTime;
+@property (nonatomic, assign) BOOL was3DTriggeredInCurrentTouch;
 @end
 
 @implementation PressHBButton
@@ -154,61 +146,7 @@ static void loadPreferences() {
     [generator impactOccurred];
 }
 
-// 多重相容性 Siri 召喚邏輯
-- (void)triggerSiri {
-    if (!gSettings.allowSiri) return;
-    dispatch_async(dispatch_get_main_queue(), ^{
-        // 方法 1: 透過 SBAssistantController 召喚 Siri
-        Class sbAssistantClass = NSClassFromString(@"SBAssistantController");
-        if (sbAssistantClass) {
-            id assistant = nil;
-            if ([sbAssistantClass respondsToSelector:@selector(sharedInstance)]) {
-#pragma clang diagnostic push
-#pragma clang diagnostic ignored "-Warc-performSelector-leaks"
-                assistant = [sbAssistantClass performSelector:@selector(sharedInstance)];
-#pragma clang diagnostic pop
-            }
-
-            if (assistant) {
-                if ([assistant respondsToSelector:@selector(activateSiriForRequestSource:)]) {
-                    typedef void (*ActivateSiriFunc)(id, SEL, NSInteger);
-                    ActivateSiriFunc func = (ActivateSiriFunc)[assistant methodForSelector:@selector(activateSiriForRequestSource:)];
-                    if (func) {
-                        func(assistant, @selector(activateSiriForRequestSource:), 1);
-                        return;
-                    }
-                }
-                if ([assistant respondsToSelector:@selector(handleSiriButtonDown)]) {
-#pragma clang diagnostic push
-#pragma clang diagnostic ignored "-Warc-performSelector-leaks"
-                    [assistant performSelector:@selector(handleSiriButtonDown)];
-                    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.1 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
-                        if ([assistant respondsToSelector:@selector(handleSiriButtonUp)]) {
-                            [assistant performSelector:@selector(handleSiriButtonUp)];
-                        }
-                    });
-#pragma clang diagnostic pop
-                    return;
-                }
-            }
-        }
-
-        // 方法 2: SpringBoard _accessibilitySiriRequested
-        SpringBoard *sb = (SpringBoard *)[UIApplication sharedApplication];
-        if ([sb respondsToSelector:@selector(_accessibilitySiriRequested)]) {
-            [sb _accessibilitySiriRequested];
-            return;
-        }
-
-        // 方法 3: 發送模擬 Home 鍵長按 HID 事件
-        sendHomeButtonHIDEvent(YES);
-        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1.2 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
-            sendHomeButtonHIDEvent(NO);
-        });
-    });
-}
-
-// 0.1 秒淡出隱藏 5 秒
+// 淡出隱藏 5 秒（期間保持隱藏狀態）
 - (void)fadeAndHideFor5Seconds {
     self.isHiddenTemporarily = YES;
     [UIView animateWithDuration:0.1 animations:^{
@@ -225,35 +163,25 @@ static void loadPreferences() {
     }];
 }
 
-// 觸控事件開始
 - (void)touchesBegan:(NSSet<UITouch *> *)touches withEvent:(UIEvent *)event {
     [super touchesBegan:touches withEvent:event];
     if (self.isHiddenTemporarily) return;
 
-    self.touchBeganTime = [NSDate timeIntervalSinceReferenceDate];
-    self.hasTriggeredAction = NO;
-    self.is3DDeepPressed = NO;
-    self.alpha = 0.8; // 按下時提亮
-
-    // 啟動 1.0 秒 Siri 召喚定時器
-    [self.siriTimer invalidate];
-    self.siriTimer = [NSTimer scheduledTimerWithTimeInterval:1.0 repeats:NO block:^(NSTimer * _Nonnull timer) {
-        if (!self.hasTriggeredAction && gSettings.allowSiri) {
-            self.hasTriggeredAction = YES;
-            [self triggerFeedback];
-            [self triggerSiri];
-        }
-    }];
+    self.was3DTriggeredInCurrentTouch = NO;
+    self.alpha = 0.8;
 
     if (gSettings.touchMode == 0) { // 3D Touch 模式
         UITouch *touch = [touches anyObject];
         [self handle3DTouchForce:touch];
+    } else { // Haptic Touch 模式：直接發送 Down 訊號，其餘由系統計算
+        [self triggerFeedback];
+        sendHomeButtonHIDEvent(YES);
     }
 }
 
 - (void)touchesMoved:(NSSet<UITouch *> *)touches withEvent:(UIEvent *)event {
     [super touchesMoved:touches withEvent:event];
-    if (self.isHiddenTemporarily || self.hasTriggeredAction) return;
+    if (self.isHiddenTemporarily) return;
 
     if (gSettings.touchMode == 0) {
         UITouch *touch = [touches anyObject];
@@ -265,51 +193,47 @@ static void loadPreferences() {
     CGFloat force = touch.force;
     CGFloat threshold = 1.5;
 
-    if (force >= threshold && !self.is3DDeepPressed) {
-        self.is3DDeepPressed = YES;
+    if (force >= threshold && !self.was3DTriggeredInCurrentTouch) {
+        self.was3DTriggeredInCurrentTouch = YES;
         [self triggerFeedback];
-    } else if (force < threshold - 0.3 && self.is3DDeepPressed) {
-        self.is3DDeepPressed = NO;
+        sendHomeButtonHIDEvent(YES);
     }
 }
 
-// 觸控結束（放手時統一且精確地發送單次 Home 鍵或隱藏）
 - (void)touchesEnded:(NSSet<UITouch *> *)touches withEvent:(UIEvent *)event {
     [super touchesEnded:touches withEvent:event];
     if (self.isHiddenTemporarily) return;
 
-    [self.siriTimer invalidate];
     self.alpha = gSettings.idleOpacity;
 
-    // 若按住過程已觸發 Siri，直接返回不重複傳送 Home 鍵
-    if (self.hasTriggeredAction) {
-        return;
-    }
-
-    // 鎖定狀態，防止二次觸發
-    self.hasTriggeredAction = YES;
-
-    NSTimeInterval duration = [NSDate timeIntervalSinceReferenceDate] - self.touchBeganTime;
-
-    if (duration < 0.3 && !self.is3DDeepPressed) {
-        // 短按（< 0.3秒且無重壓）：隱藏 5 秒
-        [self fadeAndHideFor5Seconds];
-    } else {
-        // 按住未滿 1 秒（0.3s ~ 1.0s）放手，或是 3D 重壓後放手：精確觸發一次 Home 鍵返回主畫面
-        [self triggerFeedback];
-        sendHomeButtonHIDEvent(YES);
-        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.05 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+    if (gSettings.touchMode == 0) { // 3D Touch 模式
+        if (self.was3DTriggeredInCurrentTouch) {
+            // 成功觸發重壓：發送 Up 訊號，不隱藏
             sendHomeButtonHIDEvent(NO);
-        });
+        } else {
+            // 輕點未達門檻：隱藏 5 秒
+            [self fadeAndHideFor5Seconds];
+        }
+    } else { // Haptic Touch 模式：直接發送 Up 訊號
+        sendHomeButtonHIDEvent(NO);
     }
 }
 
 - (void)touchesCancelled:(NSSet<UITouch *> *)touches withEvent:(UIEvent *)event {
     [super touchesCancelled:touches withEvent:event];
-    [self.siriTimer invalidate];
+    if (self.isHiddenTemporarily) return;
+
     self.alpha = gSettings.idleOpacity;
-    self.hasTriggeredAction = NO;
-    self.is3DDeepPressed = NO;
+
+    if (gSettings.touchMode == 0) {
+        if (self.was3DTriggeredInCurrentTouch) {
+            sendHomeButtonHIDEvent(NO);
+        }
+    } else {
+        sendHomeButtonHIDEvent(NO);
+    }
+
+    self.was3DTriggeredInCurrentTouch = NO;
 }
 
 @end
