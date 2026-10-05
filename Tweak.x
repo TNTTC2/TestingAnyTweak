@@ -8,6 +8,7 @@ static void ShowIsland(void);
 // ==================== 全域變數 ====================
 static UIWindow *islandWindow = nil;
 static UIView *islandContainer = nil;
+static UIView *gestureCaptureView = nil;
 static BOOL isIslandVisible = NO;
 
 // ==================== 工具方法 ====================
@@ -103,23 +104,45 @@ static void HideIsland(void) {
     }];
 }
 
-// ==================== 自訂下拉手勢（加大範圍）====================
+// ==================== 建立頂部透明捕捉區 ====================
+static void SetupGestureCapture(void) {
+    UIWindow *window = GetKeyWindow();
+    if (!window || gestureCaptureView) return;
+    
+    // 在最上方建立一個高度 70pt 的透明 View 專門抓手勢
+    gestureCaptureView = [[UIView alloc] initWithFrame:CGRectMake(0, 0, [UIScreen mainScreen].bounds.size.width, 70.0)];
+    gestureCaptureView.backgroundColor = [UIColor clearColor];
+    gestureCaptureView.userInteractionEnabled = YES;
+    
+    UIPanGestureRecognizer *pan = [[UIPanGestureRecognizer alloc] initWithTarget:[UIApplication sharedApplication].delegate
+                                                                          action:@selector(dm_handlePan:)];
+    // 因為 target 可能有問題，改用下面的方式
+    [gestureCaptureView addGestureRecognizer:pan];
+    
+    // 正確的 target 設定
+    pan = [[UIPanGestureRecognizer alloc] initWithTarget:gestureCaptureView action:@selector(dm_handlePan:)];
+    // 我們用 runtime 加方法比較穩定
+    [window addSubview:gestureCaptureView];
+    [window bringSubviewToFront:gestureCaptureView];
+    
+    NSLog(@"[DynamicMainland] Gesture capture view added");
+}
+
+// ==================== SpringBoard Hook ====================
 %hook SpringBoard
 
 - (void)applicationDidFinishLaunching:(id)application {
     %orig;
     
-    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1.8 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
-        UIWindow *window = GetKeyWindow();
-        if (!window) return;
-        
-        UIPanGestureRecognizer *pan = [[UIPanGestureRecognizer alloc] initWithTarget:self action:@selector(dm_handlePan:)];
-        pan.delegate = (id<UIGestureRecognizerDelegate>)self;
-        pan.cancelsTouchesInView = NO;
-        pan.maximumNumberOfTouches = 1;
-        [window addGestureRecognizer:pan];
-        
-        NSLog(@"[DynamicMainland] Pan gesture added");
+    // 多試幾次，確保 window 已經準備好
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(2.0 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+        SetupGestureCapture();
+    });
+    
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(4.0 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+        if (!gestureCaptureView) {
+            SetupGestureCapture();
+        }
     });
 }
 
@@ -127,33 +150,37 @@ static void HideIsland(void) {
 - (void)dm_handlePan:(UIPanGestureRecognizer *)gesture {
     if (isIslandVisible) return;
     
-    CGPoint location = [gesture locationInView:gesture.view];
     CGPoint translation = [gesture translationInView:gesture.view];
     
-    // 只接受從螢幕最上方 80pt 以內開始的下拉
-    if (gesture.state == UIGestureRecognizerStateBegan) {
-        if (location.y > 80.0) {
-            // 開始位置太低，忽略這次手勢
-            gesture.state = UIGestureRecognizerStateFailed;
-            return;
-        }
-    }
-    
-    // 向下拉超過 35pt 就觸發
     if (gesture.state == UIGestureRecognizerStateChanged || gesture.state == UIGestureRecognizerStateEnded) {
-        if (translation.y > 35.0) {
+        if (translation.y > 30.0) {
             ShowIsland();
-            // 觸發後重置，避免連續觸發
+            
+            // 重置手勢，避免卡住
             gesture.enabled = NO;
             gesture.enabled = YES;
         }
     }
 }
 
-// 允許跟其他手勢同時辨識（重要！否則容易被系統手勢擋住）
+%end
+
+// 讓 gestureCaptureView 也能回應方法
+%hook UIView
+
 %new
-- (BOOL)gestureRecognizer:(UIGestureRecognizer *)gestureRecognizer shouldRecognizeSimultaneouslyWithGestureRecognizer:(UIGestureRecognizer *)otherGestureRecognizer {
-    return YES;
+- (void)dm_handlePan:(UIPanGestureRecognizer *)gesture {
+    if (isIslandVisible) return;
+    
+    CGPoint translation = [gesture translationInView:gesture.view];
+    
+    if (gesture.state == UIGestureRecognizerStateChanged || gesture.state == UIGestureRecognizerStateEnded) {
+        if (translation.y > 30.0) {
+            ShowIsland();
+            gesture.enabled = NO;
+            gesture.enabled = YES;
+        }
+    }
 }
 
 %end
