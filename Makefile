@@ -1,15 +1,16 @@
-TARGET := iphone:clang:latest:15.0
+ARCHS = arm64
+TARGET := iphone:clang:16.5:15.0
+INSTALL_TARGET_PROCESSES = SpringBoard
+
 THEOS_PACKAGE_SCHEME = rootless
 
 include $(THEOS)/makefiles/common.mk
 
-TWEAK_NAME = PressHB
+TWEAK_NAME = DynamicMainland
 
-PressHB_FILES = Tweak.x
-PressHB_CFLAGS = -fobjc-arc
-PressHB_LDFLAGS = -Wl,-undefined,dynamic_lookup
-PressHB_FRAMEWORKS = UIKit CoreGraphics AudioToolbox
+DynamicMainland_FILES = Tweak.x
+DynamicMainland_CFLAGS = -fobjc-arc
+DynamicMainland_FRAMEWORKS = UIKit Foundation
+DynamicMainland_PRIVATE_FRAMEWORKS = SpringBoardServices
 
 include $(THEOS_MAKE_PATH)/tweak.mk
-SUBPROJECTS += presshbprefs
-include $(THEOS_MAKE_PATH)/aggregate.mk
