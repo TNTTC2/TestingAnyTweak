@@ -1,9 +1,9 @@
-Package: com.tnhdev.fun.presshb
-Name: PressHB
+Package: com.tnhdev.fun.dynamicmainland
+Name: Dynamic ￼￼Mainland
 Depends: mobilesubstrate, preferenceloader
 Version: 1.0.0
 Architecture: iphoneos-arm64
-Description: Virtual Home Button Tweak for iOS
+Description: iOS 27 Spotlight and more Powerful￼ for older iOS
 Maintainer: tnhdev
 Author: tnhdev
 Section: Tweaks
