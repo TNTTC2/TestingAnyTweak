@@ -12,7 +12,6 @@ static BOOL isIslandVisible = NO;
 
 // ==================== 工具方法 ====================
 static UIWindow *GetKeyWindow(void) {
-    // 相容 iOS 13+ 的取得 keyWindow 方式
     for (UIScene *scene in [UIApplication sharedApplication].connectedScenes) {
         if ([scene isKindOfClass:[UIWindowScene class]]) {
             UIWindowScene *windowScene = (UIWindowScene *)scene;
@@ -21,7 +20,6 @@ static UIWindow *GetKeyWindow(void) {
                     return window;
                 }
             }
-            // fallback
             if (windowScene.windows.count > 0) {
                 return windowScene.windows.firstObject;
             }
@@ -31,16 +29,14 @@ static UIWindow *GetKeyWindow(void) {
 }
 
 static CGFloat DynamicIslandTopOffset(void) {
-    // 使用 statusBarManager 取代 deprecated 的 statusBarFrame
     UIWindow *keyWindow = GetKeyWindow();
     if (keyWindow && keyWindow.windowScene) {
         CGFloat height = keyWindow.windowScene.statusBarManager.statusBarFrame.size.height;
         if (height > 47.0) {
-            return 59.0; // 動態島大致位置
+            return 59.0;
         }
         return height + 8.0;
     }
-    // fallback
     return 59.0;
 }
 
@@ -50,13 +46,11 @@ static void ShowIsland(void) {
     UIWindow *keyWindow = GetKeyWindow();
     if (!keyWindow) return;
     
-    // 建立浮層 Window
     islandWindow = [[UIWindow alloc] initWithFrame:[UIScreen mainScreen].bounds];
     islandWindow.windowLevel = UIWindowLevelAlert + 1;
     islandWindow.backgroundColor = [UIColor clearColor];
     islandWindow.hidden = NO;
     
-    // 主容器（島嶼本體）
     CGFloat top = DynamicIslandTopOffset();
     CGFloat width = [UIScreen mainScreen].bounds.size.width - 32.0;
     
@@ -76,18 +70,12 @@ static void ShowIsland(void) {
     [closeBtn setTitle:@"✕" forState:UIControlStateNormal];
     [closeBtn setTitleColor:[UIColor whiteColor] forState:UIControlStateNormal];
     closeBtn.titleLabel.font = [UIFont systemFontOfSize:20.0 weight:UIFontWeightMedium];
-    [closeBtn addTarget:[UIApplication sharedApplication].delegate
-                 action:@selector(dm_hideIsland)
-       forControlEvents:UIControlEventTouchUpInside];
-    
-    // 用 associated object 暫存關閉動作（簡單做法）
     [closeBtn addAction:[UIAction actionWithHandler:^(__kindof UIAction * _Nonnull action) {
         HideIsland();
     }] forControlEvents:UIControlEventTouchUpInside];
     
     [islandContainer addSubview:closeBtn];
     
-    // 動畫出現
     [UIView animateWithDuration:0.35
                           delay:0.0
          usingSpringWithDamping:0.85
@@ -115,37 +103,57 @@ static void HideIsland(void) {
     }];
 }
 
-// ==================== SpringBoard 邊緣手勢（主要觸發方式）====================
+// ==================== 自訂下拉手勢（加大範圍）====================
 %hook SpringBoard
 
 - (void)applicationDidFinishLaunching:(id)application {
     %orig;
     
-    // 延遲加入手勢，確保 window 已準備好
-    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1.5 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1.8 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
         UIWindow *window = GetKeyWindow();
         if (!window) return;
         
-        UIScreenEdgePanGestureRecognizer *edgePan = [[UIScreenEdgePanGestureRecognizer alloc] initWithTarget:self action:@selector(dm_handleEdgePan:)];
-        edgePan.edges = UIRectEdgeTop;
-        edgePan.delegate = (id<UIGestureRecognizerDelegate>)self;
-        [window addGestureRecognizer:edgePan];
+        UIPanGestureRecognizer *pan = [[UIPanGestureRecognizer alloc] initWithTarget:self action:@selector(dm_handlePan:)];
+        pan.delegate = (id<UIGestureRecognizerDelegate>)self;
+        pan.cancelsTouchesInView = NO;
+        pan.maximumNumberOfTouches = 1;
+        [window addGestureRecognizer:pan];
+        
+        NSLog(@"[DynamicMainland] Pan gesture added");
     });
 }
 
 %new
-- (void)dm_handleEdgePan:(UIScreenEdgePanGestureRecognizer *)gesture {
-    if (gesture.state == UIGestureRecognizerStateBegan || gesture.state == UIGestureRecognizerStateChanged) {
-        CGPoint translation = [gesture translationInView:gesture.view];
-        if (translation.y > 28.0 && !isIslandVisible) {
+- (void)dm_handlePan:(UIPanGestureRecognizer *)gesture {
+    if (isIslandVisible) return;
+    
+    CGPoint location = [gesture locationInView:gesture.view];
+    CGPoint translation = [gesture translationInView:gesture.view];
+    
+    // 只接受從螢幕最上方 80pt 以內開始的下拉
+    if (gesture.state == UIGestureRecognizerStateBegan) {
+        if (location.y > 80.0) {
+            // 開始位置太低，忽略這次手勢
+            gesture.state = UIGestureRecognizerStateFailed;
+            return;
+        }
+    }
+    
+    // 向下拉超過 35pt 就觸發
+    if (gesture.state == UIGestureRecognizerStateChanged || gesture.state == UIGestureRecognizerStateEnded) {
+        if (translation.y > 35.0) {
             ShowIsland();
+            // 觸發後重置，避免連續觸發
+            gesture.enabled = NO;
+            gesture.enabled = YES;
         }
     }
 }
 
+// 允許跟其他手勢同時辨識（重要！否則容易被系統手勢擋住）
 %new
-- (void)dm_hideIsland {
-    HideIsland();
+- (BOOL)gestureRecognizer:(UIGestureRecognizer *)gestureRecognizer shouldRecognizeSimultaneouslyWithGestureRecognizer:(UIGestureRecognizer *)otherGestureRecognizer {
+    return YES;
 }
 
 %end
