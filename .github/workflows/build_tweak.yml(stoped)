@@ -1,4 +1,4 @@
-name: Build ScreenMySaver Rootless Tweak (.deb)
+name: Build AppBeforeX Rootless Tweak (.deb)
 
 on:
   push:
@@ -37,5 +37,5 @@ jobs:
     - name: Upload .deb Artifact
       uses: actions/upload-artifact@v4
       with:
-        name: DynamicMainland-Deb
+        name: AppBeforeX-Deb
         path: packages/*.deb
