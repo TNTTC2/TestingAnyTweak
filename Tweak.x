@@ -1,191 +1,102 @@
 #import <UIKit/UIKit.h>
-#import <objc/runtime.h>
+#import <Foundation/Foundation.h>
 
-// ==================== 前置宣告 ====================
-static void HideIsland(void);
-static void ShowIsland(void);
+static NSString * const kPrefsID = @"com.tnhdev.fun.appbeforeX";
+static NSString * const kEnabledKey = @"Enabled";
+static NSString * const kAppsKey = @"EnabledApps";   // Dictionary: BundleID -> BOOL
 
-// ==================== 全域變數 ====================
-static UIWindow *islandWindow = nil;
-static UIView *islandContainer = nil;
-static UIView *gestureCaptureView = nil;
-static BOOL isIslandVisible = NO;
+static BOOL tweakEnabled = YES;
+static NSDictionary *enabledApps = nil;
 
-// ==================== 工具方法 ====================
-static UIWindow *GetKeyWindow(void) {
-    for (UIScene *scene in [UIApplication sharedApplication].connectedScenes) {
-        if ([scene isKindOfClass:[UIWindowScene class]]) {
-            UIWindowScene *windowScene = (UIWindowScene *)scene;
-            for (UIWindow *window in windowScene.windows) {
-                if (window.isKeyWindow) {
-                    return window;
-                }
-            }
-            if (windowScene.windows.count > 0) {
-                return windowScene.windows.firstObject;
-            }
-        }
-    }
-    return nil;
-}
-
-static CGFloat DynamicIslandTopOffset(void) {
-    UIWindow *keyWindow = GetKeyWindow();
-    if (keyWindow && keyWindow.windowScene) {
-        CGFloat height = keyWindow.windowScene.statusBarManager.statusBarFrame.size.height;
-        if (height > 47.0) {
-            return 59.0;
-        }
-        return height + 8.0;
-    }
-    return 59.0;
-}
-
-static void ShowIsland(void) {
-    if (isIslandVisible) return;
-    
-    UIWindow *keyWindow = GetKeyWindow();
-    if (!keyWindow) return;
-    
-    islandWindow = [[UIWindow alloc] initWithFrame:[UIScreen mainScreen].bounds];
-    islandWindow.windowLevel = UIWindowLevelAlert + 1;
-    islandWindow.backgroundColor = [UIColor clearColor];
-    islandWindow.hidden = NO;
-    
-    CGFloat top = DynamicIslandTopOffset();
-    CGFloat width = [UIScreen mainScreen].bounds.size.width - 32.0;
-    
-    islandContainer = [[UIView alloc] initWithFrame:CGRectMake(16.0, top, width, 320.0)];
-    islandContainer.backgroundColor = [UIColor colorWithRed:0.11 green:0.11 blue:0.12 alpha:0.96];
-    islandContainer.layer.cornerRadius = 28.0;
-    islandContainer.layer.cornerCurve = kCACornerCurveContinuous;
-    islandContainer.clipsToBounds = YES;
-    islandContainer.alpha = 0.0;
-    islandContainer.transform = CGAffineTransformMakeScale(0.92, 0.92);
-    
-    [islandWindow addSubview:islandContainer];
-    
-    // 關閉按鈕
-    UIButton *closeBtn = [UIButton buttonWithType:UIButtonTypeSystem];
-    closeBtn.frame = CGRectMake(width - 50.0, 12.0, 36.0, 36.0);
-    [closeBtn setTitle:@"✕" forState:UIControlStateNormal];
-    [closeBtn setTitleColor:[UIColor whiteColor] forState:UIControlStateNormal];
-    closeBtn.titleLabel.font = [UIFont systemFontOfSize:20.0 weight:UIFontWeightMedium];
-    [closeBtn addAction:[UIAction actionWithHandler:^(__kindof UIAction * _Nonnull action) {
-        HideIsland();
-    }] forControlEvents:UIControlEventTouchUpInside];
-    
-    [islandContainer addSubview:closeBtn];
-    
-    [UIView animateWithDuration:0.35
-                          delay:0.0
-         usingSpringWithDamping:0.85
-          initialSpringVelocity:0.6
-                        options:UIViewAnimationOptionCurveEaseOut
-                     animations:^{
-        islandContainer.alpha = 1.0;
-        islandContainer.transform = CGAffineTransformIdentity;
-    } completion:nil];
-    
-    isIslandVisible = YES;
-}
-
-static void HideIsland(void) {
-    if (!isIslandVisible) return;
-    
-    [UIView animateWithDuration:0.25 animations:^{
-        islandContainer.alpha = 0.0;
-        islandContainer.transform = CGAffineTransformMakeScale(0.92, 0.92);
-    } completion:^(BOOL finished) {
-        islandWindow.hidden = YES;
-        islandWindow = nil;
-        islandContainer = nil;
-        isIslandVisible = NO;
+static void loadPreferences() {
+    NSUserDefaults *defaults = [[NSUserDefaults alloc] initWithSuiteName:kPrefsID];
+    [defaults registerDefaults:@{
+        kEnabledKey: @YES,
+        kAppsKey: @{}
     }];
+
+    tweakEnabled = [defaults boolForKey:kEnabledKey];
+    enabledApps = [defaults dictionaryForKey:kAppsKey] ?: @{};
 }
 
-// ==================== 建立頂部透明捕捉區 ====================
-static void SetupGestureCapture(void) {
-    UIWindow *window = GetKeyWindow();
-    if (!window || gestureCaptureView) return;
-    
-    // 在最上方建立一個高度 70pt 的透明 View 專門抓手勢
-    gestureCaptureView = [[UIView alloc] initWithFrame:CGRectMake(0, 0, [UIScreen mainScreen].bounds.size.width, 70.0)];
-    gestureCaptureView.backgroundColor = [UIColor clearColor];
-    gestureCaptureView.userInteractionEnabled = YES;
-    
-    UIPanGestureRecognizer *pan = [[UIPanGestureRecognizer alloc] initWithTarget:[UIApplication sharedApplication].delegate
-                                                                          action:@selector(dm_handlePan:)];
-    // 因為 target 可能有問題，改用下面的方式
-    [gestureCaptureView addGestureRecognizer:pan];
-    
-    // 正確的 target 設定
-    pan = [[UIPanGestureRecognizer alloc] initWithTarget:gestureCaptureView action:@selector(dm_handlePan:)];
-    // 我們用 runtime 加方法比較穩定
-    [window addSubview:gestureCaptureView];
-    [window bringSubviewToFront:gestureCaptureView];
-    
-    NSLog(@"[DynamicMainland] Gesture capture view added");
+static BOOL isAppEnabled(NSString *bundleID) {
+    if (!tweakEnabled) return NO;
+    if (!bundleID || [bundleID hasPrefix:@"com.apple."]) return NO;
+
+    // 如果使用者從未設定過這個 App，預設啟用
+    id value = enabledApps[bundleID];
+    if (value == nil) return YES;
+    return [value boolValue];
 }
 
-// ==================== SpringBoard Hook ====================
-%hook SpringBoard
-
-- (void)applicationDidFinishLaunching:(id)application {
-    %orig;
-    
-    // 多試幾次，確保 window 已經準備好
-    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(2.0 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
-        SetupGestureCapture();
-    });
-    
-    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(4.0 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
-        if (!gestureCaptureView) {
-            SetupGestureCapture();
-        }
-    });
+static BOOL shouldApply() {
+    NSString *bundleID = [[NSBundle mainBundle] bundleIdentifier];
+    return isAppEnabled(bundleID);
 }
 
-%new
-- (void)dm_handlePan:(UIPanGestureRecognizer *)gesture {
-    if (isIslandVisible) return;
-    
-    CGPoint translation = [gesture translationInView:gesture.view];
-    
-    if (gesture.state == UIGestureRecognizerStateChanged || gesture.state == UIGestureRecognizerStateEnded) {
-        if (translation.y > 30.0) {
-            ShowIsland();
-            
-            // 重置手勢，避免卡住
-            gesture.enabled = NO;
-            gesture.enabled = YES;
-        }
+static CGRect letterboxedBounds(CGRect original) {
+    CGFloat targetAspect = 16.0 / 9.0;
+    CGFloat currentAspect = original.size.width / original.size.height;
+
+    if (currentAspect > targetAspect) {
+        CGFloat newWidth = original.size.height * targetAspect;
+        CGFloat x = (original.size.width - newWidth) / 2.0;
+        return CGRectMake(x, 0, newWidth, original.size.height);
+    } else {
+        CGFloat newHeight = original.size.width / targetAspect;
+        CGFloat y = (original.size.height - newHeight) / 2.0;
+        return CGRectMake(0, y, original.size.width, newHeight);
     }
+}
+
+%hook UIScreen
+
+- (CGRect)bounds {
+    CGRect original = %orig;
+    if (!shouldApply()) return original;
+    return letterboxedBounds(original);
+}
+
+- (CGRect)nativeBounds {
+    CGRect original = %orig;
+    if (!shouldApply()) return original;
+
+    CGFloat scale = self.scale;
+    CGRect logical = letterboxedBounds(CGRectMake(0, 0, original.size.width / scale, original.size.height / scale));
+    return CGRectMake(0, 0, logical.size.width * scale, logical.size.height * scale);
+}
+
+- (CGRect)applicationFrame {
+    if (!shouldApply()) return %orig;
+    return [self bounds];
 }
 
 %end
 
-// 讓 gestureCaptureView 也能回應方法
-%hook UIView
+%hook UIWindow
 
-%new
-- (void)dm_handlePan:(UIPanGestureRecognizer *)gesture {
-    if (isIslandVisible) return;
-    
-    CGPoint translation = [gesture translationInView:gesture.view];
-    
-    if (gesture.state == UIGestureRecognizerStateChanged || gesture.state == UIGestureRecognizerStateEnded) {
-        if (translation.y > 30.0) {
-            ShowIsland();
-            gesture.enabled = NO;
-            gesture.enabled = YES;
-        }
+- (void)setFrame:(CGRect)frame {
+    if (shouldApply() && self == [UIApplication sharedApplication].keyWindow) {
+        frame = [UIScreen mainScreen].bounds;
     }
+    %orig(frame);
 }
 
 %end
 
-// ==================== 建構函式 ====================
+static void preferencesChanged(CFNotificationCenterRef center, void *observer, CFStringRef name, const void *object, CFDictionaryRef userInfo) {
+    loadPreferences();
+}
+
 %ctor {
-    NSLog(@"[DynamicMainland] Loaded");
+    loadPreferences();
+
+    CFNotificationCenterAddObserver(CFNotificationCenterGetDarwinNotifyCenter(),
+                                    NULL,
+                                    preferencesChanged,
+                                    CFSTR("com.tnhdev.fun.appbeforeX/preferences.changed"),
+                                    NULL,
+                                    CFNotificationSuspensionBehaviorDeliverImmediately);
+
+    %init;
 }
