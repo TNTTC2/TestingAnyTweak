@@ -1,9 +1,9 @@
-Package: com.tnhdev.fun.dynamicmainland
-Name: Dynamic ￼￼Mainland
-Depends: mobilesubstrate, preferenceloader
-Version: 1.0.0
+Package: com.tnhdev.fun.appbeforeX
+Name: App Before X
+Depends: mobilesubstrate | ellekit, preferenceloader
+Version: 0.1.0
 Architecture: iphoneos-arm64
-Description: iOS 27 Spotlight and more Powerful￼ for older iOS
+Description: App Screen look like before Support the iPhone X
 Maintainer: tnhdev
 Author: tnhdev
 Section: Tweaks
