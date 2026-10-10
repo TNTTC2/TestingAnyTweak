@@ -1,0 +1,51 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>items</key>
+    <array>
+        <dict>
+            <key>cell</key>
+            <string>PSGroupCell</string>
+            <key>label</key>
+            <string>App Before X</string>
+            <key>footerText</key>
+            <string>Make apps display with black bars like they did before iPhone X full-screen support.</string>
+        </dict>
+        <dict>
+            <key>cell</key>
+            <string>PSSwitchCell</string>
+            <key>default</key>
+            <true/>
+            <key>defaults</key>
+            <string>com.tnhdev.fun.appbeforeX</string>
+            <key>key</key>
+            <string>Enabled</string>
+            <key>label</key>
+            <string>Enable</string>
+            <key>PostNotification</key>
+            <string>com.tnhdev.fun.appbeforeX/preferences.changed</string>
+        </dict>
+        <dict>
+            <key>cell</key>
+            <string>PSGroupCell</string>
+            <key>label</key>
+            <string>Applications</string>
+            <key>footerText</key>
+            <string>Choose which apps should use the classic letterboxed look. All third-party apps are enabled by default.</string>
+        </dict>
+        <dict>
+            <key>cell</key>
+            <string>PSLinkCell</string>
+            <key>detail</key>
+            <string>AppBeforeXAppsListController</string>
+            <key>isController</key>
+            <true/>
+            <key>label</key>
+            <string>Select Apps</string>
+        </dict>
+    </array>
+    <key>title</key>
+    <string>App Before X</string>
+</dict>
+</plist>
