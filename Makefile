@@ -1,16 +1,14 @@
-ARCHS = arm64
-TARGET := iphone:clang:16.5:15.0
-INSTALL_TARGET_PROCESSES = SpringBoard
-
-THEOS_PACKAGE_SCHEME = rootless
+TARGET := iphone:clang:latest:15.0
+ARCHS = arm64 arm64e
 
 include $(THEOS)/makefiles/common.mk
 
-TWEAK_NAME = DynamicMainland
+TWEAK_NAME = AppBeforeX
 
-DynamicMainland_FILES = Tweak.x
-DynamicMainland_CFLAGS = -fobjc-arc
-DynamicMainland_FRAMEWORKS = UIKit Foundation
-DynamicMainland_PRIVATE_FRAMEWORKS = SpringBoardServices
+AppBeforeX_FILES = Tweak.x
+AppBeforeX_CFLAGS = -fobjc-arc
+AppBeforeX_FRAMEWORKS = UIKit Foundation
 
+SUBPROJECTS += appbeforexprefs
+include $(THEOS_MAKE_PATH)/aggregate.mk
 include $(THEOS_MAKE_PATH)/tweak.mk
