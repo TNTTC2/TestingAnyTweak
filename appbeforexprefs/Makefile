@@ -10,6 +10,6 @@ AppBeforeXPrefs_FRAMEWORKS = UIKit
 AppBeforeXPrefs_PRIVATE_FRAMEWORKS = Preferences
 AppBeforeXPrefs_INSTALL_PATH = /Library/PreferenceBundles
 AppBeforeXPrefs_CFLAGS = -fobjc-arc
-AppBeforeXPrefs_LDFLAGS = -F$(THEOS_VENDOR_LIBRARY_PATH) -framework Preferences
+AppBeforeXPrefs_LDFLAGS = -L$(THEOS_PROJECT_DIR)/vendor/lib -framework Preferences
 
 include $(THEOS_MAKE_PATH)/bundle.mk
