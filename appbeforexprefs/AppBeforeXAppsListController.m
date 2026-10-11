@@ -1,11 +1,8 @@
 #import "AppBeforeXAppsListController.h"
-#import <Preferences/PSSpecifier.h>
-#import <objc/runtime.h>
 
 @interface LSApplicationProxy : NSObject
 @property (nonatomic, readonly) NSString *applicationIdentifier;
 @property (nonatomic, readonly) NSString *localizedName;
-@property (nonatomic, readonly) NSURL *bundleURL;
 + (instancetype)applicationProxyForIdentifier:(NSString *)identifier;
 @end
 
@@ -20,18 +17,16 @@
     if (!_specifiers) {
         NSMutableArray *specs = [NSMutableArray array];
 
-        // Header
         PSSpecifier *header = [PSSpecifier preferenceSpecifierNamed:@"Select Apps"
                                                               target:nil
-                                                                 set:nil
-                                                                 get:nil
+                                                                 set:NULL
+                                                                 get:NULL
                                                               detail:nil
                                                                 cell:PSGroupCell
                                                                 edit:nil];
         [header setProperty:@"Apps that have the switch ON will use the pre-iPhone X letterboxed look." forKey:@"footerText"];
         [specs addObject:header];
 
-        // Get all user apps
         LSApplicationWorkspace *workspace = [LSApplicationWorkspace defaultWorkspace];
         NSArray *apps = [workspace allApplications];
 
@@ -43,7 +38,6 @@
             [userApps addObject:app];
         }
 
-        // Sort by name
         [userApps sortUsingComparator:^NSComparisonResult(LSApplicationProxy *a, LSApplicationProxy *b) {
             return [a.localizedName localizedCaseInsensitiveCompare:b.localizedName];
         }];
@@ -74,7 +68,7 @@
     NSUserDefaults *defaults = [[NSUserDefaults alloc] initWithSuiteName:@"com.tnhdev.fun.appbeforeX"];
     NSDictionary *apps = [defaults dictionaryForKey:@"EnabledApps"] ?: @{};
     id value = apps[bundleID];
-    if (value == nil) return @YES; // default ON
+    if (value == nil) return @YES;
     return value;
 }
 
