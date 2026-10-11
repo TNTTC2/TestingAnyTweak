@@ -1,15 +1,5 @@
 #import "AppBeforeXAppsListController.h"
-
-@interface LSApplicationProxy : NSObject
-@property (nonatomic, readonly) NSString *applicationIdentifier;
-@property (nonatomic, readonly) NSString *localizedName;
-+ (instancetype)applicationProxyForIdentifier:(NSString *)identifier;
-@end
-
-@interface LSApplicationWorkspace : NSObject
-+ (instancetype)defaultWorkspace;
-- (NSArray *)allApplications;
-@end
+#import <objc/runtime.h>
 
 @implementation AppBeforeXAppsListController
 
@@ -17,44 +7,62 @@
     if (!_specifiers) {
         NSMutableArray *specs = [NSMutableArray array];
 
-        PSSpecifier *header = [PSSpecifier preferenceSpecifierNamed:@"Select Apps"
-                                                              target:nil
-                                                                 set:NULL
-                                                                 get:NULL
-                                                              detail:nil
-                                                                cell:PSGroupCell
-                                                                edit:nil];
-        [header setProperty:@"Apps that have the switch ON will use the pre-iPhone X letterboxed look." forKey:@"footerText"];
+        // 取得 PSSpecifier class
+        Class PSSpecifierClass = objc_getClass("PSSpecifier");
+
+        id header = ((id (*)(Class, SEL, NSString *, id, SEL, SEL, Class, NSInteger, Class))objc_msgSend)(
+            PSSpecifierClass,
+            @selector(preferenceSpecifierNamed:target:set:get:detail:cell:edit:),
+            @"Select Apps",
+            nil, NULL, NULL, nil, 0, nil
+        );
+        ((void (*)(id, SEL, id, NSString *))objc_msgSend)(header, @selector(setProperty:forKey:), @"Apps that have the switch ON will use the pre-iPhone X letterboxed look.", @"footerText");
         [specs addObject:header];
 
-        LSApplicationWorkspace *workspace = [LSApplicationWorkspace defaultWorkspace];
-        NSArray *apps = [workspace allApplications];
+        // 取得 LSApplicationWorkspace
+        Class LSApplicationWorkspaceClass = objc_getClass("LSApplicationWorkspace");
+        id workspace = ((id (*)(Class, SEL))objc_msgSend)(LSApplicationWorkspaceClass, @selector(defaultWorkspace));
+        NSArray *apps = ((NSArray *(*)(id, SEL))objc_msgSend)(workspace, @selector(allApplications));
 
         NSMutableArray *userApps = [NSMutableArray array];
-        for (LSApplicationProxy *app in apps) {
-            NSString *bid = app.applicationIdentifier;
+        for (id app in apps) {
+            NSString *bid = ((NSString *(*)(id, SEL))objc_msgSend)(app, @selector(applicationIdentifier));
             if (!bid || [bid hasPrefix:@"com.apple."]) continue;
-            if (!app.localizedName) continue;
+
+            NSString *name = ((NSString *(*)(id, SEL))objc_msgSend)(app, @selector(localizedName));
+            if (!name) continue;
+
             [userApps addObject:app];
         }
 
-        [userApps sortUsingComparator:^NSComparisonResult(LSApplicationProxy *a, LSApplicationProxy *b) {
-            return [a.localizedName localizedCaseInsensitiveCompare:b.localizedName];
+        [userApps sortUsingComparator:^NSComparisonResult(id a, id b) {
+            NSString *nameA = ((NSString *(*)(id, SEL))objc_msgSend)(a, @selector(localizedName));
+            NSString *nameB = ((NSString *(*)(id, SEL))objc_msgSend)(b, @selector(localizedName));
+            return [nameA localizedCaseInsensitiveCompare:nameB];
         }];
 
-        for (LSApplicationProxy *app in userApps) {
-            PSSpecifier *spec = [PSSpecifier preferenceSpecifierNamed:app.localizedName
-                                                               target:self
-                                                                  set:@selector(setAppEnabled:specifier:)
-                                                                  get:@selector(isAppEnabled:)
-                                                               detail:nil
-                                                                 cell:PSSwitchCell
-                                                                 edit:nil];
-            [spec setProperty:app.applicationIdentifier forKey:@"bundleID"];
-            [spec setProperty:app.applicationIdentifier forKey:@"key"];
-            [spec setProperty:@"com.tnhdev.fun.appbeforeX" forKey:@"defaults"];
-            [spec setProperty:@"com.tnhdev.fun.appbeforeX/preferences.changed" forKey:@"PostNotification"];
-            [spec setProperty:@YES forKey:@"default"];
+        for (id app in userApps) {
+            NSString *name = ((NSString *(*)(id, SEL))objc_msgSend)(app, @selector(localizedName));
+            NSString *bid = ((NSString *(*)(id, SEL))objc_msgSend)(app, @selector(applicationIdentifier));
+
+            id spec = ((id (*)(Class, SEL, NSString *, id, SEL, SEL, Class, NSInteger, Class))objc_msgSend)(
+                PSSpecifierClass,
+                @selector(preferenceSpecifierNamed:target:set:get:detail:cell:edit:),
+                name,
+                self,
+                @selector(setAppEnabled:specifier:),
+                @selector(isAppEnabled:),
+                nil,
+                5, // PSSwitchCell
+                nil
+            );
+
+            ((void (*)(id, SEL, id, NSString *))objc_msgSend)(spec, @selector(setProperty:forKey:), bid, @"bundleID");
+            ((void (*)(id, SEL, id, NSString *))objc_msgSend)(spec, @selector(setProperty:forKey:), bid, @"key");
+            ((void (*)(id, SEL, id, NSString *))objc_msgSend)(spec, @selector(setProperty:forKey:), @"com.tnhdev.fun.appbeforeX", @"defaults");
+            ((void (*)(id, SEL, id, NSString *))objc_msgSend)(spec, @selector(setProperty:forKey:), @"com.tnhdev.fun.appbeforeX/preferences.changed", @"PostNotification");
+            ((void (*)(id, SEL, id, NSString *))objc_msgSend)(spec, @selector(setProperty:forKey:), @YES, @"default");
+
             [specs addObject:spec];
         }
 
@@ -63,8 +71,8 @@
     return _specifiers;
 }
 
-- (id)isAppEnabled:(PSSpecifier *)specifier {
-    NSString *bundleID = [specifier propertyForKey:@"bundleID"];
+- (id)isAppEnabled:(id)specifier {
+    NSString *bundleID = ((id (*)(id, SEL, NSString *))objc_msgSend)(specifier, @selector(propertyForKey:), @"bundleID");
     NSUserDefaults *defaults = [[NSUserDefaults alloc] initWithSuiteName:@"com.tnhdev.fun.appbeforeX"];
     NSDictionary *apps = [defaults dictionaryForKey:@"EnabledApps"] ?: @{};
     id value = apps[bundleID];
@@ -72,8 +80,8 @@
     return value;
 }
 
-- (void)setAppEnabled:(id)value specifier:(PSSpecifier *)specifier {
-    NSString *bundleID = [specifier propertyForKey:@"bundleID"];
+- (void)setAppEnabled:(id)value specifier:(id)specifier {
+    NSString *bundleID = ((id (*)(id, SEL, NSString *))objc_msgSend)(specifier, @selector(propertyForKey:), @"bundleID");
     NSUserDefaults *defaults = [[NSUserDefaults alloc] initWithSuiteName:@"com.tnhdev.fun.appbeforeX"];
     NSMutableDictionary *apps = [[defaults dictionaryForKey:@"EnabledApps"] mutableCopy] ?: [NSMutableDictionary dictionary];
     apps[bundleID] = value;
