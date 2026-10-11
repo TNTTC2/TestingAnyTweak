@@ -1,5 +1,4 @@
 #import "AppBeforeXRootListController.h"
-#import <Preferences/PSSpecifier.h>
 
 @implementation AppBeforeXRootListController
 
