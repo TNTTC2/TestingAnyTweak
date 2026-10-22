@@ -54,6 +54,14 @@ static void sendHomeButtonHIDEvent(BOOL isDown) {
     });
 }
 
+// 發送一次完整的 Home 鍵點按 (Down -> Up)
+static void sendSingleHomeButtonClick(void) {
+    sendHomeButtonHIDEvent(YES);
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.05 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+        sendHomeButtonHIDEvent(NO);
+    });
+}
+
 static void loadPreferences() {
     CFPreferencesAppSynchronize(kPreferenceDomain);
 
@@ -127,7 +135,7 @@ static void loadPreferences() {
 @property (nonatomic, assign) BOOL isDeepPressed;
 @property (nonatomic, assign) BOOL was3DTriggeredInCurrentTouch;
 
-// Haptic Touch 狀態標記
+// Haptic Touch 狀態標記 (對齊原生邏輯)
 @property (nonatomic, assign) BOOL isHapticEngaged;
 @property (nonatomic, assign) BOOL waitingForSecondLightTap;
 @property (nonatomic, strong) NSTimer *hapticPressTimer;
@@ -154,10 +162,13 @@ static void loadPreferences() {
     [generator impactOccurred];
 }
 
-// 檢查目前是否為橫向且不允許橫向顯示
+// 精準檢查目前是否為橫向
 - (BOOL)isCurrentOrientationLandscape {
-    CGRect bounds = [UIScreen mainScreen].bounds;
-    return bounds.size.width > bounds.size.height;
+    UIWindowScene *scene = self.window.windowScene;
+    if (scene) {
+        return UIInterfaceOrientationIsLandscape(scene.interfaceOrientation);
+    }
+    return UIInterfaceOrientationIsLandscape([UIApplication sharedApplication].statusBarOrientation);
 }
 
 // 淡出隱藏 5 秒（輕點專用）
@@ -190,14 +201,16 @@ static void loadPreferences() {
         [self handle3DTouchForce:touch];
     } else { // Haptic Touch 模式
         if (self.waitingForSecondLightTap) {
+            // 第二次點擊按下
             [self triggerFeedback];
+            sendHomeButtonHIDEvent(YES);
         } else {
+            // 第一次按下，啟動 0.5 秒長按計時
             self.isHapticEngaged = NO;
             [self.hapticPressTimer invalidate];
             self.hapticPressTimer = [NSTimer scheduledTimerWithTimeInterval:0.5 repeats:NO block:^(NSTimer * _Nonnull timer) {
                 self.isHapticEngaged = YES;
-                [self triggerFeedback];
-                sendHomeButtonHIDEvent(YES); // 達到 0.5 秒按住觸發 Home DOWN
+                [self triggerFeedback]; // 達到 0.5 秒時震動
             }];
         }
     }
@@ -257,19 +270,26 @@ static void loadPreferences() {
         [self.hapticPressTimer invalidate];
 
         if (self.waitingForSecondLightTap) {
+            // 第二次點擊放手 -> 發送 Home UP 完成雙擊
             [self triggerFeedback];
+            sendHomeButtonHIDEvent(NO);
             self.waitingForSecondLightTap = NO;
             [self.hapticSwitchWindowTimer invalidate];
         } else {
             if (self.isHapticEngaged) {
+                // 長按超過 0.5 秒後放手 -> 觸發一次 Home 點擊
                 [self triggerFeedback];
-                sendHomeButtonHIDEvent(NO); // 釋放 Home 鍵
+                sendSingleHomeButtonClick();
                 
+                // 開啟 0.5 秒等待視窗接收第二次點擊（App 切換器）
                 self.waitingForSecondLightTap = YES;
                 [self.hapticSwitchWindowTimer invalidate];
                 self.hapticSwitchWindowTimer = [NSTimer scheduledTimerWithTimeInterval:0.5 repeats:NO block:^(NSTimer * _Nonnull timer) {
                     self.waitingForSecondLightTap = NO;
                 }];
+            } else {
+                // 按住少於 0.5 秒（輕點） -> 隱藏 5 秒
+                [self fadeAndHideFor5Seconds];
             }
         }
         self.isHapticEngaged = NO;
@@ -339,22 +359,28 @@ static void reloadTweakState() {
             return;
         }
 
-        CGRect screenBounds = [UIScreen mainScreen].bounds;
-        BOOL isLandscape = screenBounds.size.width > screenBounds.size.height;
+        // 強制橫向檢查：若不允許橫向且目前為橫向，直接隱藏視窗
+        BOOL isLandscape = NO;
+        UIWindowScene *activeScene = nil;
+        for (UIScene *scene in [UIApplication sharedApplication].connectedScenes) {
+            if ([scene isKindOfClass:[UIWindowScene class]]) {
+                activeScene = (UIWindowScene *)scene;
+                break;
+            }
+        }
+        
+        if (activeScene) {
+            isLandscape = UIInterfaceOrientationIsLandscape(activeScene.interfaceOrientation);
+        } else {
+            isLandscape = UIInterfaceOrientationIsLandscape([UIApplication sharedApplication].statusBarOrientation);
+        }
+
         if (isLandscape && !gSettings.allowLandscape) {
             if (gHBWindow) gHBWindow.hidden = YES;
             return;
         }
 
         if (!gHBWindow) {
-            UIWindowScene *activeScene = nil;
-            for (UIScene *scene in [UIApplication sharedApplication].connectedScenes) {
-                if ([scene isKindOfClass:[UIWindowScene class]]) {
-                    activeScene = (UIWindowScene *)scene;
-                    break;
-                }
-            }
-
             gHBWindow = activeScene ? [[PressHBWindow alloc] initWithWindowScene:activeScene] : [[PressHBWindow alloc] initWithFrame:CGRectZero];
             gHBWindow.windowLevel = UIWindowLevelStatusBar + 100;
             gHBWindow.backgroundColor = [UIColor clearColor];
