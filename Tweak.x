@@ -135,7 +135,7 @@ static void loadPreferences() {
 @property (nonatomic, assign) BOOL isDeepPressed;
 @property (nonatomic, assign) BOOL was3DTriggeredInCurrentTouch;
 
-// Haptic Touch 狀態標記 (對齊原生邏輯)
+// Haptic Touch 狀態標記
 @property (nonatomic, assign) BOOL isHapticEngaged;
 @property (nonatomic, assign) BOOL waitingForSecondLightTap;
 @property (nonatomic, strong) NSTimer *hapticPressTimer;
@@ -164,14 +164,16 @@ static void loadPreferences() {
 
 // 精準檢查目前是否為橫向
 - (BOOL)isCurrentOrientationLandscape {
+    CGRect bounds = [UIScreen mainScreen].bounds;
+    if (bounds.size.width > bounds.size.height) return YES;
+    
+    UIDeviceOrientation devOrientation = [UIDevice currentDevice].orientation;
+    if (UIDeviceOrientationIsLandscape(devOrientation)) return YES;
+    
     UIWindowScene *scene = self.window.windowScene;
-    if (scene) {
-        return UIInterfaceOrientationIsLandscape(scene.interfaceOrientation);
-    }
-#pragma clang diagnostic push
-#pragma clang diagnostic ignored "-Wdeprecated-declarations"
-    return UIInterfaceOrientationIsLandscape([UIApplication sharedApplication].statusBarOrientation);
-#pragma clang diagnostic pop
+    if (scene && UIInterfaceOrientationIsLandscape(scene.interfaceOrientation)) return YES;
+    
+    return NO;
 }
 
 // 淡出隱藏 5 秒（輕點專用）
@@ -194,8 +196,8 @@ static void loadPreferences() {
 // 觸控開始
 - (void)touchesBegan:(NSSet<UITouch *> *)touches withEvent:(UIEvent *)event {
     [super touchesBegan:touches withEvent:event];
-    if (self.isHiddenTemporarily) return;
     if ([self isCurrentOrientationLandscape] && !gSettings.allowLandscape) return;
+    if (self.isHiddenTemporarily) return;
 
     if (gSettings.touchMode == 0) { // 3D Touch 模式
         self.isDeepPressed = NO;
@@ -221,8 +223,8 @@ static void loadPreferences() {
 
 - (void)touchesMoved:(NSSet<UITouch *> *)touches withEvent:(UIEvent *)event {
     [super touchesMoved:touches withEvent:event];
-    if (self.isHiddenTemporarily) return;
     if ([self isCurrentOrientationLandscape] && !gSettings.allowLandscape) return;
+    if (self.isHiddenTemporarily) return;
 
     if (gSettings.touchMode == 0) {
         UITouch *touch = [touches anyObject];
@@ -256,8 +258,8 @@ static void loadPreferences() {
 
 - (void)touchesEnded:(NSSet<UITouch *> *)touches withEvent:(UIEvent *)event {
     [super touchesEnded:touches withEvent:event];
-    if (self.isHiddenTemporarily) return;
     if ([self isCurrentOrientationLandscape] && !gSettings.allowLandscape) return;
+    if (self.isHiddenTemporarily) return;
 
     if (gSettings.touchMode == 0) { // 3D Touch 模式
         if (self.isDeepPressed) {
@@ -363,22 +365,12 @@ static void reloadTweakState() {
         }
 
         // 強制橫向檢查：若不允許橫向且目前為橫向，直接隱藏視窗
-        BOOL isLandscape = NO;
-        UIWindowScene *activeScene = nil;
-        for (UIScene *scene in [UIApplication sharedApplication].connectedScenes) {
-            if ([scene isKindOfClass:[UIWindowScene class]]) {
-                activeScene = (UIWindowScene *)scene;
-                break;
-            }
-        }
+        CGRect bounds = [UIScreen mainScreen].bounds;
+        BOOL isLandscape = (bounds.size.width > bounds.size.height);
         
-        if (activeScene) {
-            isLandscape = UIInterfaceOrientationIsLandscape(activeScene.interfaceOrientation);
-        } else {
-#pragma clang diagnostic push
-#pragma clang diagnostic ignored "-Wdeprecated-declarations"
-            isLandscape = UIInterfaceOrientationIsLandscape([UIApplication sharedApplication].statusBarOrientation);
-#pragma clang diagnostic pop
+        if (!isLandscape) {
+            UIDeviceOrientation devOrientation = [UIDevice currentDevice].orientation;
+            if (UIDeviceOrientationIsLandscape(devOrientation)) isLandscape = YES;
         }
 
         if (isLandscape && !gSettings.allowLandscape) {
@@ -387,6 +379,14 @@ static void reloadTweakState() {
         }
 
         if (!gHBWindow) {
+            UIWindowScene *activeScene = nil;
+            for (UIScene *scene in [UIApplication sharedApplication].connectedScenes) {
+                if ([scene isKindOfClass:[UIWindowScene class]]) {
+                    activeScene = (UIWindowScene *)scene;
+                    break;
+                }
+            }
+
             gHBWindow = activeScene ? [[PressHBWindow alloc] initWithWindowScene:activeScene] : [[PressHBWindow alloc] initWithFrame:CGRectZero];
             gHBWindow.windowLevel = UIWindowLevelStatusBar + 100;
             gHBWindow.backgroundColor = [UIColor clearColor];
@@ -408,6 +408,12 @@ static void reloadTweakState() {
 static void setupNotificationObservers() {
     NSNotificationCenter *nc = [NSNotificationCenter defaultCenter];
 
+    // 開啟裝置方向監控
+    [[UIDevice currentDevice] beginGeneratingDeviceOrientationNotifications];
+    [nc addObserverForName:UIDeviceOrientationDidChangeNotification object:nil queue:[NSOperationQueue mainQueue] usingBlock:^(NSNotification * _Nonnull note) {
+        reloadTweakState();
+    }];
+
     // 鍵盤狀態過濾
     [nc addObserverForName:UIKeyboardWillShowNotification object:nil queue:[NSOperationQueue mainQueue] usingBlock:^(NSNotification * _Nonnull note) {
         if (!gSettings.allowKeyboard && gHBWindow) {
@@ -420,14 +426,6 @@ static void setupNotificationObservers() {
             gHBWindow.hidden = NO;
         }
     }];
-
-    // 螢幕旋轉 / 狀態列方向改變過濾
-#pragma clang diagnostic push
-#pragma clang diagnostic ignored "-Wdeprecated-declarations"
-    [nc addObserverForName:UIApplicationDidChangeStatusBarOrientationNotification object:nil queue:[NSOperationQueue mainQueue] usingBlock:^(NSNotification * _Nonnull note) {
-        reloadTweakState();
-    }];
-#pragma clang diagnostic pop
 }
 
 %hook SBLockScreenManager
