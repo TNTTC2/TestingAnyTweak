@@ -1,4 +1,4 @@
-name: Build AppBeforeX Rootless Tweak (.deb)
+name: Build PressHB Rootless Tweak (.deb)
 
 on:
   push:
@@ -37,5 +37,5 @@ jobs:
     - name: Upload .deb Artifact
       uses: actions/upload-artifact@v4
       with:
-        name: AppBeforeX-Deb
+        name: PressHB-Deb
         path: packages/*.deb
