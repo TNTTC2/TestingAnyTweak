@@ -1,9 +1,0 @@
-Package: com.tnhdev.fun.appbeforeX
-Name: App Before X
-Depends: mobilesubstrate | ellekit, preferenceloader
-Version: 0.1.0
-Architecture: iphoneos-arm64
-Description: App Screen look like before Support the iPhone X
-Maintainer: tnhdev
-Author: tnhdev
-Section: Tweaks
