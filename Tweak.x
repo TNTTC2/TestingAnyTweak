@@ -127,7 +127,7 @@ static void loadPreferences() {
 @property (nonatomic, assign) BOOL isDeepPressed;
 @property (nonatomic, assign) BOOL was3DTriggeredInCurrentTouch;
 
-// Haptic Touch 狀態標記 (對齊你提供的原版邏輯)
+// Haptic Touch 狀態標記
 @property (nonatomic, assign) BOOL isHapticEngaged;
 @property (nonatomic, assign) BOOL waitingForSecondLightTap;
 @property (nonatomic, strong) NSTimer *hapticPressTimer;
@@ -188,7 +188,7 @@ static void loadPreferences() {
         self.was3DTriggeredInCurrentTouch = NO;
         UITouch *touch = [touches anyObject];
         [self handle3DTouchForce:touch];
-    } else { // Haptic Touch 模式 (對齊你提供的邏輯)
+    } else { // Haptic Touch 模式
         if (self.waitingForSecondLightTap) {
             [self triggerFeedback];
         } else {
@@ -253,18 +253,17 @@ static void loadPreferences() {
         }
         self.isDeepPressed = NO;
         self.was3DTriggeredInCurrentTouch = NO;
-    } else { // Haptic Touch 模式 (對齊你提供的邏輯)
+    } else { // Haptic Touch 模式
         [self.hapticPressTimer invalidate];
 
         if (self.waitingForSecondLightTap) {
             [self triggerFeedback];
-            self.waitingForSecondLightTap = false;
+            self.waitingForSecondLightTap = NO;
             [self.hapticSwitchWindowTimer invalidate];
         } else {
             if (self.isHapticEngaged) {
                 [self triggerFeedback];
-                sendHomeButtonHIDEvent(UP); // 修正：發送 Home UP
-                sendHomeButtonHIDEvent(NO);
+                sendHomeButtonHIDEvent(NO); // 釋放 Home 鍵
                 
                 self.waitingForSecondLightTap = YES;
                 [self.hapticSwitchWindowTimer invalidate];
@@ -340,7 +339,6 @@ static void reloadTweakState() {
             return;
         }
 
-        // 強制橫向檢查：若不允許橫向且目前為橫向，直接隱藏
         CGRect screenBounds = [UIScreen mainScreen].bounds;
         BOOL isLandscape = screenBounds.size.width > screenBounds.size.height;
         if (isLandscape && !gSettings.allowLandscape) {
@@ -392,9 +390,12 @@ static void setupNotificationObservers() {
     }];
 
     // 螢幕旋轉 / 狀態列方向改變過濾
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wdeprecated-declarations"
     [nc addObserverForName:UIApplicationDidChangeStatusBarOrientationNotification object:nil queue:[NSOperationQueue mainQueue] usingBlock:^(NSNotification * _Nonnull note) {
         reloadTweakState();
     }];
+#pragma clang diagnostic pop
 }
 
 %hook SBLockScreenManager
@@ -427,7 +428,6 @@ static void setupNotificationObservers() {
                                                       usingBlock:^(NSNotification * _Nonnull note) {
             gIsAppLaunched = YES;
             setupNotificationObservers();
-            reloadTworkingState:
             reloadTweakState();
         }];
 
