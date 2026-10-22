@@ -168,7 +168,10 @@ static void loadPreferences() {
     if (scene) {
         return UIInterfaceOrientationIsLandscape(scene.interfaceOrientation);
     }
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wdeprecated-declarations"
     return UIInterfaceOrientationIsLandscape([UIApplication sharedApplication].statusBarOrientation);
+#pragma clang diagnostic pop
 }
 
 // 淡出隱藏 5 秒（輕點專用）
@@ -372,7 +375,10 @@ static void reloadTweakState() {
         if (activeScene) {
             isLandscape = UIInterfaceOrientationIsLandscape(activeScene.interfaceOrientation);
         } else {
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wdeprecated-declarations"
             isLandscape = UIInterfaceOrientationIsLandscape([UIApplication sharedApplication].statusBarOrientation);
+#pragma clang diagnostic pop
         }
 
         if (isLandscape && !gSettings.allowLandscape) {
