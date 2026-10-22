@@ -39,7 +39,6 @@ static void sendHomeButtonHIDEvent(BOOL isDown) {
         });
 
         if (createKeyboardEvent) {
-            // Consumer Page = 0x0C, Menu / Home Button = 0x40
             IOHIDEventRef event = createKeyboardEvent(kCFAllocatorDefault, time, 0x0C, 0x40, isDown, 0);
             if (event) {
                 SpringBoard *sb = (SpringBoard *)[UIApplication sharedApplication];
@@ -127,6 +126,12 @@ static void loadPreferences() {
 // 3D Touch 狀態標記
 @property (nonatomic, assign) BOOL isDeepPressed;
 @property (nonatomic, assign) BOOL was3DTriggeredInCurrentTouch;
+
+// Haptic Touch 狀態標記 (對齊你提供的原版邏輯)
+@property (nonatomic, assign) BOOL isHapticEngaged;
+@property (nonatomic, assign) BOOL waitingForSecondLightTap;
+@property (nonatomic, strong) NSTimer *hapticPressTimer;
+@property (nonatomic, strong) NSTimer *hapticSwitchWindowTimer;
 @end
 
 @implementation PressHBButton
@@ -147,6 +152,12 @@ static void loadPreferences() {
     UIImpactFeedbackGenerator *generator = [[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleMedium];
     [generator prepare];
     [generator impactOccurred];
+}
+
+// 檢查目前是否為橫向且不允許橫向顯示
+- (BOOL)isCurrentOrientationLandscape {
+    CGRect bounds = [UIScreen mainScreen].bounds;
+    return bounds.size.width > bounds.size.height;
 }
 
 // 淡出隱藏 5 秒（輕點專用）
@@ -170,23 +181,32 @@ static void loadPreferences() {
 - (void)touchesBegan:(NSSet<UITouch *> *)touches withEvent:(UIEvent *)event {
     [super touchesBegan:touches withEvent:event];
     if (self.isHiddenTemporarily) return;
+    if ([self isCurrentOrientationLandscape] && !gSettings.allowLandscape) return;
 
     if (gSettings.touchMode == 0) { // 3D Touch 模式
         self.isDeepPressed = NO;
         self.was3DTriggeredInCurrentTouch = NO;
-        // 注意：輕觸時不改變不透明度，保持 idleOpacity，只有真正達到力度門檻才變高亮
         UITouch *touch = [touches anyObject];
         [self handle3DTouchForce:touch];
-    } else { // Haptic Touch 模式
-        self.alpha = 0.8;
-        [self triggerFeedback];
-        sendHomeButtonHIDEvent(YES);
+    } else { // Haptic Touch 模式 (對齊你提供的邏輯)
+        if (self.waitingForSecondLightTap) {
+            [self triggerFeedback];
+        } else {
+            self.isHapticEngaged = NO;
+            [self.hapticPressTimer invalidate];
+            self.hapticPressTimer = [NSTimer scheduledTimerWithTimeInterval:0.5 repeats:NO block:^(NSTimer * _Nonnull timer) {
+                self.isHapticEngaged = YES;
+                [self triggerFeedback];
+                sendHomeButtonHIDEvent(YES); // 達到 0.5 秒按住觸發 Home DOWN
+            }];
+        }
     }
 }
 
 - (void)touchesMoved:(NSSet<UITouch *> *)touches withEvent:(UIEvent *)event {
     [super touchesMoved:touches withEvent:event];
     if (self.isHiddenTemporarily) return;
+    if ([self isCurrentOrientationLandscape] && !gSettings.allowLandscape) return;
 
     if (gSettings.touchMode == 0) {
         UITouch *touch = [touches anyObject];
@@ -200,14 +220,12 @@ static void loadPreferences() {
     CGFloat threshold = 1.5;
 
     if (force >= threshold && !self.isDeepPressed) {
-        // 壓下去！
         self.isDeepPressed = YES;
         self.was3DTriggeredInCurrentTouch = YES;
-        self.alpha = 0.8; // 成功重壓才變亮
+        self.alpha = 0.8;
         [self triggerFeedback];
-        sendHomeButtonHIDEvent(YES); // 發送 Home DOWN
+        sendHomeButtonHIDEvent(YES);
     } else if (force < threshold - 0.3 && self.isDeepPressed) {
-        // 鬆手/減壓放開！
         [self process3DTouchRelease];
     }
 }
@@ -217,47 +235,65 @@ static void loadPreferences() {
     self.isDeepPressed = NO;
     self.alpha = gSettings.idleOpacity;
     [self triggerFeedback];
-    sendHomeButtonHIDEvent(NO); // 發送 Home UP
+    sendHomeButtonHIDEvent(NO);
 }
 
 - (void)touchesEnded:(NSSet<UITouch *> *)touches withEvent:(UIEvent *)event {
     [super touchesEnded:touches withEvent:event];
     if (self.isHiddenTemporarily) return;
+    if ([self isCurrentOrientationLandscape] && !gSettings.allowLandscape) return;
 
     if (gSettings.touchMode == 0) { // 3D Touch 模式
         if (self.isDeepPressed) {
-            // 手指離開螢幕時仍在重壓狀態：執行放開 Home 鍵
             [self process3DTouchRelease];
         } else if (!self.was3DTriggeredInCurrentTouch) {
-            // 未曾達到重壓門檻的快速輕點放手：隱藏 5 秒
             [self fadeAndHideFor5Seconds];
         } else {
-            // 曾重壓但放手過程中力度已先降回門檻以下（前面已執行過 release）
             self.alpha = gSettings.idleOpacity;
         }
         self.isDeepPressed = NO;
         self.was3DTriggeredInCurrentTouch = NO;
-    } else { // Haptic Touch 模式
-        self.alpha = gSettings.idleOpacity;
-        sendHomeButtonHIDEvent(NO);
+    } else { // Haptic Touch 模式 (對齊你提供的邏輯)
+        [self.hapticPressTimer invalidate];
+
+        if (self.waitingForSecondLightTap) {
+            [self triggerFeedback];
+            self.waitingForSecondLightTap = false;
+            [self.hapticSwitchWindowTimer invalidate];
+        } else {
+            if (self.isHapticEngaged) {
+                [self triggerFeedback];
+                sendHomeButtonHIDEvent(UP); // 修正：發送 Home UP
+                sendHomeButtonHIDEvent(NO);
+                
+                self.waitingForSecondLightTap = YES;
+                [self.hapticSwitchWindowTimer invalidate];
+                self.hapticSwitchWindowTimer = [NSTimer scheduledTimerWithTimeInterval:0.5 repeats:NO block:^(NSTimer * _Nonnull timer) {
+                    self.waitingForSecondLightTap = NO;
+                }];
+            }
+        }
+        self.isHapticEngaged = NO;
     }
 }
 
 - (void)touchesCancelled:(NSSet<UITouch *> *)touches withEvent:(UIEvent *)event {
     [super touchesCancelled:touches withEvent:event];
-    if (self.isHiddenTemporarily) return;
+    [self.hapticPressTimer invalidate];
+    [self.hapticSwitchWindowTimer invalidate];
 
+    self.alpha = gSettings.idleOpacity;
     if (gSettings.touchMode == 0) {
         if (self.isDeepPressed) {
             [self process3DTouchRelease];
         }
-        self.alpha = gSettings.idleOpacity;
         self.isDeepPressed = NO;
         self.was3DTriggeredInCurrentTouch = NO;
     } else {
-        self.alpha = gSettings.idleOpacity;
         sendHomeButtonHIDEvent(NO);
     }
+    self.isHapticEngaged = NO;
+    self.waitingForSecondLightTap = NO;
 }
 
 @end
@@ -280,30 +316,12 @@ static void updateWindowPosition() {
     CGFloat y = height - btnSize - marginY;
 
     switch (gSettings.position) {
-        case 0: // Bottom
-            x = (width - btnSize) / 2.0;
-            y = height - btnSize - marginY;
-            break;
-        case 1: // Bottom Left
-            x = marginX;
-            y = height - btnSize - marginY;
-            break;
-        case 2: // Bottom Right
-            x = width - btnSize - marginX;
-            y = height - btnSize - marginY;
-            break;
-        case 3: // Top
-            x = (width - btnSize) / 2.0;
-            y = marginY + 20.0;
-            break;
-        case 4: // Top Left
-            x = marginX;
-            y = marginY + 20.0;
-            break;
-        case 5: // Top Right
-            x = width - btnSize - marginX;
-            y = marginY + 20.0;
-            break;
+        case 0: x = (width - btnSize) / 2.0; y = height - btnSize - marginY; break;
+        case 1: x = marginX; y = height - btnSize - marginY; break;
+        case 2: x = width - btnSize - marginX; y = height - btnSize - marginY; break;
+        case 3: x = (width - btnSize) / 2.0; y = marginY + 20.0; break;
+        case 4: x = marginX; y = marginY + 20.0; break;
+        case 5: x = width - btnSize - marginX; y = marginY + 20.0; break;
     }
 
     gHBWindow.frame = CGRectMake(x, y, btnSize, btnSize);
@@ -318,9 +336,15 @@ static void reloadTweakState() {
 
     dispatch_async(dispatch_get_main_queue(), ^{
         if (!gSettings.enabled) {
-            if (gHBWindow) {
-                gHBWindow.hidden = YES;
-            }
+            if (gHBWindow) gHBWindow.hidden = YES;
+            return;
+        }
+
+        // 強制橫向檢查：若不允許橫向且目前為橫向，直接隱藏
+        CGRect screenBounds = [UIScreen mainScreen].bounds;
+        BOOL isLandscape = screenBounds.size.width > screenBounds.size.height;
+        if (isLandscape && !gSettings.allowLandscape) {
+            if (gHBWindow) gHBWindow.hidden = YES;
             return;
         }
 
@@ -333,12 +357,7 @@ static void reloadTweakState() {
                 }
             }
 
-            if (activeScene) {
-                gHBWindow = [[PressHBWindow alloc] initWithWindowScene:activeScene];
-            } else {
-                gHBWindow = [[PressHBWindow alloc] initWithFrame:CGRectZero];
-            }
-
+            gHBWindow = activeScene ? [[PressHBWindow alloc] initWithWindowScene:activeScene] : [[PressHBWindow alloc] initWithFrame:CGRectZero];
             gHBWindow.windowLevel = UIWindowLevelStatusBar + 100;
             gHBWindow.backgroundColor = [UIColor clearColor];
 
@@ -372,19 +391,10 @@ static void setupNotificationObservers() {
         }
     }];
 
-    // 橫向狀態過濾
-#pragma clang diagnostic push
-#pragma clang diagnostic ignored "-Wdeprecated-declarations"
+    // 螢幕旋轉 / 狀態列方向改變過濾
     [nc addObserverForName:UIApplicationDidChangeStatusBarOrientationNotification object:nil queue:[NSOperationQueue mainQueue] usingBlock:^(NSNotification * _Nonnull note) {
-        UIInterfaceOrientation orientation = [UIApplication sharedApplication].statusBarOrientation;
-        BOOL isLandscape = UIInterfaceOrientationIsLandscape(orientation);
-        if (isLandscape && !gSettings.allowLandscape) {
-            if (gHBWindow) gHBWindow.hidden = YES;
-        } else {
-            if (gSettings.enabled && gHBWindow) gHBWindow.hidden = NO;
-        }
+        reloadTweakState();
     }];
-#pragma clang diagnostic pop
 }
 
 %hook SBLockScreenManager
@@ -417,6 +427,7 @@ static void setupNotificationObservers() {
                                                       usingBlock:^(NSNotification * _Nonnull note) {
             gIsAppLaunched = YES;
             setupNotificationObservers();
+            reloadTworkingState:
             reloadTweakState();
         }];
 
